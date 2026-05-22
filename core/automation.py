@@ -186,6 +186,52 @@ def wait_for_framework_restart(adb_target: str, timeout_sec: int = 60) -> bool:
     return False
 
 
+def _kill_uiautomator2_atx(adb_target: str) -> None:
+    """Kill the uiautomator2 ATX agent on the device so a fresh one starts on next connect."""
+    try:
+        log.info("Killing stale uiautomator2 ATX agent on device...")
+        adb_cmd(["-s", adb_target, "shell", "am", "force-stop", "com.github.uiautomator"], timeout=10)
+        adb_cmd(["-s", adb_target, "shell", "am", "force-stop", "com.github.uiautomator.test"], timeout=10)
+        # Also kill the instrumentation process directly
+        adb_cmd(["-s", adb_target, "shell", "pkill", "-f", "uiautomator"], timeout=5)
+        time.sleep(2)
+        log.info("ATX agent killed. Will restart on next u2.connect().")
+    except Exception as exc:
+        log.debug("ATX kill attempt (non-fatal): %s", exc)
+
+
+def _wait_system_server_stable(adb_target: str, stable_sec: int = 5, timeout_sec: int = 45) -> bool:
+    """Wait until system_server PID remains unchanged for `stable_sec` seconds.
+    
+    This catches the case where boot_completed=1 but system_server is still
+    restarting (e.g. after framework stop/start during identity reset).
+    """
+    log.info("Waiting for system_server to stabilize (PID stable for %ds)...", stable_sec)
+    deadline = time.time() + timeout_sec
+    last_pid = ""
+    stable_since = 0.0
+    
+    while time.time() < deadline:
+        try:
+            result = adb_cmd(["-s", adb_target, "shell", "pidof", "system_server"], timeout=5)
+            pid = result.stdout.strip()
+        except Exception:
+            pid = ""
+        
+        if pid and pid == last_pid:
+            if time.time() - stable_since >= stable_sec:
+                log.info("system_server PID %s stable for %ds. Ready.", pid, stable_sec)
+                return True
+        else:
+            last_pid = pid
+            stable_since = time.time()
+        
+        time.sleep(1)
+    
+    log.warning("system_server did not stabilize within %ds", timeout_sec)
+    return False
+
+
 def get_robust_device(adb_target: str, timeout_sec: int = 120) -> u2.Device:
     """Acquires a uiautomator2 connection with strict reconnect loops for VPS environments."""
     adb_target = normalize_adb_target(adb_target)
@@ -194,6 +240,7 @@ def get_robust_device(adb_target: str, timeout_sec: int = 120) -> u2.Device:
     attempt = 0
     last_reset = 0.0
     last_state = ""
+    last_atx_kill = 0.0  # cooldown tracker for ATX kills
     
     while time.time() < deadline:
         attempt += 1
@@ -218,6 +265,14 @@ def get_robust_device(adb_target: str, timeout_sec: int = 120) -> u2.Device:
             log.info("✅ uiautomator2 handle successfully bound to ADB TCP.")
             return device
         except Exception as exc:
+            exc_str = str(exc)
+            # Detect DeadSystemException — ATX agent has stale system_server references
+            if "DeadSystemException" in exc_str and (time.time() - last_atx_kill > 15):
+                log.warning("DeadSystemException detected — killing ATX + waiting for system_server stability...")
+                _kill_uiautomator2_atx(adb_target)
+                _wait_system_server_stable(adb_target, stable_sec=5, timeout_sec=30)
+                last_atx_kill = time.time()
+                continue
             if attempt % 6 == 0:
                 reset_stale_adb_transport(adb_target)
                 last_reset = time.time()
@@ -341,60 +396,147 @@ def hide_keyboard(device: u2.Device) -> None:
 
 
 def robust_type(device: u2.Device, selector, text: str, field_desc: str = "Input Field") -> bool:
-    """Input text bypassing Android 11 keyboard freezes.
+    """Input text using a multi-strategy fallback chain.
     
-    Uses uiautomator2 native typing, but immediately recovers via direct ADB keyevent injections
-    if the keyboard focus freezes or input fields fail to update.
+    Strategy order:
+      1. uiautomator2 set_text() — fastest, works on most standard fields
+      2. uiautomator2 send_keys() with FastInputIME — handles WebView fields
+      3. ADB broadcast clipboard paste — handles special chars (@, #, etc.)
+      4. ADB input text with full string — last resort
     """
     log.info("Typing into %s...", field_desc)
-    
-    try:
-        # Disable InputIME inside uiautomator2 to prevent WebView focus locking bugs
-        device.set_input_ime(False)
-    except Exception:
-        pass
         
-    # Attempt click to focus
+    # Attempt click to focus the field
     try:
-        if selector.exists(timeout=5):
+        if selector.exists(timeout=8):
             selector.click()
-            time.sleep(0.5)
+            time.sleep(0.8)
     except Exception as e:
         log.debug("Focus click failed for %s: %s", field_desc, e)
 
-    # Perform character input
-    success = False
+    # Clear existing text first
     try:
         selector.clear_text()
-        time.sleep(0.2)
-        
-        # Human-like keyboard simulation
-        for char in text:
-            # Escape space character for ADB
-            if char == " ":
-                device.shell("input keyevent 62") # KEYCODE_SPACE
-            else:
-                # Direct key injection is immune to uiautomator2 IME server crashes
-                device.shell(f"input text '{char}'")
-            time.sleep(random.uniform(0.04, 0.1))
-        success = True
-    except Exception as exc:
-        log.warning("Native IME typing failed, attempting brute-force ADB keystroke recovery: %s", exc)
+        time.sleep(0.3)
+    except Exception:
+        # Fallback clear via select-all + delete
         try:
-            # Delete potential garbage
-            for _ in range(50):
-                device.shell("input keyevent 67") # KEYCODE_DEL
-            
-            # Simple direct text stream injection
-            escaped = text.replace(" ", "%s")
-            device.shell(f"input text '{escaped}'")
-            success = True
-        except Exception as adb_e:
-            log.error("Brute-force ADB typing fallback crashed: %s", adb_e)
+            device.shell("input keyevent 29 --longpress")  # Ctrl+A
+            time.sleep(0.1)
+            device.shell("input keyevent 67")  # DEL
+            time.sleep(0.2)
+        except Exception:
+            pass
 
-    # Force hide the keyboard layout so it doesn't block the 'Next' button
+    # ── STRATEGY 1: uiautomator2 set_text (native) ──
+    try:
+        log.debug("[%s] Strategy 1: set_text()", field_desc)
+        selector.set_text(text)
+        time.sleep(0.5)
+        # Verify text was actually entered
+        current = selector.get_text() or ""
+        if text.lower() in current.lower():
+            log.info("[%s] ✅ set_text() succeeded.", field_desc)
+            hide_keyboard(device)
+            return True
+        log.debug("[%s] set_text() wrote '%s' but got '%s'", field_desc, text, current)
+    except Exception as exc:
+        log.debug("[%s] set_text() failed: %s", field_desc, exc)
+
+    # ── STRATEGY 2: uiautomator2 send_keys with FastInputIME ──
+    try:
+        log.debug("[%s] Strategy 2: send_keys() with FastInputIME", field_desc)
+        # Re-click to ensure focus
+        try:
+            selector.click()
+            time.sleep(0.5)
+        except Exception:
+            pass
+        # Enable FastInputIME for send_keys
+        try:
+            device.set_input_ime(True)
+        except Exception:
+            pass
+        device.send_keys(text, clear=True)
+        time.sleep(0.5)
+        # Disable FastInputIME after typing to restore normal keyboard
+        try:
+            device.set_input_ime(False)
+        except Exception:
+            pass
+        # Verify
+        current = ""
+        try:
+            current = selector.get_text() or ""
+        except Exception:
+            pass
+        if text.lower() in current.lower() or len(current) >= len(text) - 2:
+            log.info("[%s] ✅ send_keys() succeeded.", field_desc)
+            hide_keyboard(device)
+            return True
+        log.debug("[%s] send_keys() verification unclear: '%s'", field_desc, current)
+    except Exception as exc:
+        log.debug("[%s] send_keys() failed: %s", field_desc, exc)
+        try:
+            device.set_input_ime(False)
+        except Exception:
+            pass
+
+    # ── STRATEGY 3: ADB clipboard broadcast paste ──
+    try:
+        log.debug("[%s] Strategy 3: ADB clipboard paste", field_desc)
+        # Re-click and clear
+        try:
+            selector.click()
+            time.sleep(0.3)
+            for _ in range(len(text) + 5):
+                device.shell("input keyevent 67")
+        except Exception:
+            pass
+        # Set clipboard via am broadcast
+        escaped_text = text.replace("'", "'\"'\"'")
+        device.shell(f"am broadcast -a clipper.set -e text '{escaped_text}'")
+        time.sleep(0.3)
+        # Paste via Ctrl+V
+        device.shell("input keyevent 279")  # KEYCODE_PASTE
+        time.sleep(0.5)
+        # Verify
+        current = ""
+        try:
+            current = selector.get_text() or ""
+        except Exception:
+            pass
+        if text.lower() in current.lower():
+            log.info("[%s] ✅ Clipboard paste succeeded.", field_desc)
+            hide_keyboard(device)
+            return True
+    except Exception as exc:
+        log.debug("[%s] Clipboard paste failed: %s", field_desc, exc)
+
+    # ── STRATEGY 4: ADB input text (full string, properly escaped) ──
+    try:
+        log.info("[%s] Strategy 4: ADB input text (full string)", field_desc)
+        # Re-click and clear
+        try:
+            selector.click()
+            time.sleep(0.3)
+            for _ in range(len(text) + 5):
+                device.shell("input keyevent 67")
+        except Exception:
+            pass
+        # Escape special shell characters for ADB input text
+        # ADB input text handles most chars but needs shell escaping
+        safe = text.replace("\\", "\\\\").replace("'", "'\"'\"'").replace(" ", "%s")
+        device.shell(f"input text '{safe}'")
+        time.sleep(0.5)
+        log.info("[%s] ✅ ADB input text sent (unverified).", field_desc)
+        hide_keyboard(device)
+        return True
+    except Exception as exc:
+        log.error("[%s] All 4 typing strategies exhausted. Last error: %s", field_desc, exc)
+
     hide_keyboard(device)
-    return success
+    return False
 
 
 def robust_click(device: u2.Device, selector, field_desc: str = "Button", timeout: int = 5) -> bool:
@@ -1077,6 +1219,34 @@ def run_pipeline(
         if reset_identity:
             if not step0_reset_device_identity(adb_target):
                 result["message"] = "Step 0 (Identity purge) failed."
+                print("[STATUS]: ERROR")
+                return result
+            # Re-acquire refreshed device handle after soft reboot to avoid DeadSystemException
+            # Wait for boot + system_server stability + kill stale ATX agent + reconnect
+            log.info("Waiting for Android boot to complete after identity reset...")
+            _adb_t = normalize_adb_target(adb_target)
+            _boot_ok = False
+            for _ in range(30):
+                try:
+                    boot_val = adb_shell_prop(_adb_t, "sys.boot_completed", timeout=5)
+                    if boot_val == "1":
+                        _boot_ok = True
+                        break
+                except Exception:
+                    pass
+                time.sleep(2)
+            if _boot_ok:
+                log.info("Boot complete. Waiting for system_server to stabilize...")
+                _wait_system_server_stable(_adb_t, stable_sec=5, timeout_sec=30)
+                log.info("Killing stale ATX agent before reconnect...")
+                _kill_uiautomator2_atx(_adb_t)
+            else:
+                log.warning("Boot flag still pending after 60s, proceeding anyway...")
+            try:
+                log.info("Re-acquiring uiautomator2 device handle after identity reset...")
+                device = get_robust_device(adb_target, timeout_sec=120)
+            except Exception as exc:
+                result["message"] = f"Failed to re-acquire device handle after identity reset: {exc}"
                 print("[STATUS]: ERROR")
                 return result
 

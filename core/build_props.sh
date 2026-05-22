@@ -527,15 +527,21 @@ verify_props() {
         echo "  ❌ isa.arm = $ISA (should be deleted)"
     fi
 
-    # TrickyStore Keybox permission check
-    local KB_PERM
-    KB_PERM=$(su_exec "stat -c '%a' /data/adb/tricky_store/keybox.xml" 2>/dev/null | tr -d '\r' || echo "")
-    TOTAL=$((TOTAL + 1))
-    if [ "$KB_PERM" = "600" ]; then
-        echo "  ✅ keybox.xml permissions = 600 (restricted)"
-        SCORE=$((SCORE + 1))
+    # TrickyStore Keybox permission check (optional — only scored if keybox is deployed)
+    local KB_EXISTS
+    KB_EXISTS=$(su_exec "[ -f /data/adb/tricky_store/keybox.xml ] && echo yes || echo no" 2>/dev/null | tr -d '\r' || echo "no")
+    if [ "$KB_EXISTS" = "yes" ]; then
+        local KB_PERM
+        KB_PERM=$(su_exec "stat -c '%a' /data/adb/tricky_store/keybox.xml" 2>/dev/null | tr -d '\r' || echo "")
+        TOTAL=$((TOTAL + 1))
+        if [ "$KB_PERM" = "600" ]; then
+            echo "  ✅ keybox.xml permissions = 600 (restricted)"
+            SCORE=$((SCORE + 1))
+        else
+            echo "  ❌ keybox.xml permissions = ${KB_PERM:-none} (must be 600)"
+        fi
     else
-        echo "  ❌ keybox.xml permissions = ${KB_PERM:-none} (must be 600)"
+        echo "  ℹ️  keybox.xml not deployed (optional — place in config/keybox.xml and run 'keybox' command)"
     fi
 
     echo ""
@@ -602,41 +608,45 @@ reset_device_identity() {
     echo "    Boot ID:    $NEW_BOOT_ID"
     echo ""
 
-    echo "  [1/6] Force-stopping Google processes..."
-    for pkg in com.google.android.gms \
-               com.android.vending \
-               com.google.android.apps.subscriptions.red \
-               com.google.android.gsf \
-               com.google.android.gsf.login \
-               com.google.android.gms.setup \
-               com.google.android.setupwizard; do
-        $ADB shell am force-stop "$pkg" 2>/dev/null || true
-    done
-    sleep 1
-
-    echo "  [2/6] Clearing Google app data storage..."
-    for pkg in com.google.android.gms \
-               com.android.vending \
-               com.google.android.apps.subscriptions.red \
-               com.google.android.gsf \
-               com.google.android.gsf.login; do
-        $ADB shell pm clear "$pkg" 2>/dev/null || true
+    echo "  [1/6] Stopping Android Java runtime framework..."
+    su_exec "stop"
+    echo "  Waiting for system_server and zygote to terminate..."
+    for i in $(seq 1 30); do
+        local server_pid=""
+        local zygote_pid=""
+        server_pid=$(su_exec "pidof system_server" || echo "")
+        zygote_pid=$(su_exec "pidof zygote zygote64" || echo "")
+        if [ -z "$server_pid" ] && [ -z "$zygote_pid" ]; then
+            echo "    Framework terminated successfully."
+            break
+        fi
+        sleep 1
     done
 
-    echo "  [3/6] Wiping GSF database cache..."
-    su_exec "rm -rf /data/data/com.google.android.gsf/databases/*" || true
-    su_exec "rm -rf /data/data/com.google.android.gsf/shared_prefs/*" || true
-    su_exec "rm -rf /data/data/com.google.android.gms/databases/phenotype*" || true
-    su_exec "rm -rf /data/data/com.google.android.gms/databases/config*" || true
-
-    echo "  [4/6] Removing existing Google Accounts..."
-    # Nuclear account database removal
+    echo "  [2/6] Clearing Google app data storage & wiping databases..."
+    # Safe database removal while zygote/system_server are stopped
     su_exec "rm -rf /data/system/users/0/accounts_ce.db*" || true
     su_exec "rm -rf /data/system/users/0/accounts_de.db*" || true
     su_exec "rm -rf /data/system_ce/0/accounts_ce.db*" || true
     su_exec "rm -rf /data/system_de/0/accounts_de.db*" || true
 
-    echo "  [5/6] Writing fresh identifiers to properties..."
+    su_exec "rm -rf /data/data/com.google.android.gsf/databases/*" || true
+    su_exec "rm -rf /data/data/com.google.android.gsf/shared_prefs/*" || true
+    su_exec "rm -rf /data/data/com.google.android.gms/databases/phenotype*" || true
+    su_exec "rm -rf /data/data/com.google.android.gms/databases/config*" || true
+    su_exec "rm -rf /data/data/com.google.android.gms/shared_prefs/adid_settings.xml" || true
+
+    # Clear cache directories to remove any remaining local state
+    for pkg in com.google.android.gms \
+               com.android.vending \
+               com.google.android.apps.subscriptions.red \
+               com.google.android.gsf \
+               com.google.android.gsf.login; do
+        su_exec "rm -rf /data/data/$pkg/cache/*" || true
+        su_exec "rm -rf /data/data/$pkg/code_cache/*" || true
+    done
+
+    echo "  [3/6] Writing fresh identifiers to properties..."
     set_prop "persist.radio.imei"          "$NEW_IMEI"
     set_prop "persist.radio.imei1"         "$NEW_IMEI"
     set_prop "persist.radio.imei2"         "$NEW_IMEI2"
@@ -649,8 +659,6 @@ reset_device_identity() {
     set_prop "ro.boot.serialno"            "$NEW_SERIAL"
     set_prop "persist.sys.serialno"        "$NEW_SERIAL"
 
-    $ADB shell settings put secure android_id "$NEW_ANDROID_ID" 2>/dev/null || true
-
     set_prop "ro.boot.wifi_macaddr"        "$NEW_MAC"
     set_prop "persist.wifi.mac"            "$NEW_MAC"
     set_prop "ro.boot.btmacaddr"           "$(echo "$NEW_MAC" | awk -F: '{printf "%s:%s:%s:%s:%s:%s",$1,$2,$3,strftime("%X"),$5,$6}' 2>/dev/null || echo "$NEW_MAC")"
@@ -658,9 +666,28 @@ reset_device_identity() {
     set_prop "ro.boot.bootreason"          "reboot"
     set_prop "ro.runtime.firstboot"        "$(date +%s)000"
 
-    su_exec "rm -rf /data/data/com.google.android.gms/shared_prefs/adid_settings.xml" || true
+    echo "  [4/6] Starting Android Java runtime framework..."
+    su_exec "start"
 
-    echo "  [6/6] Regenerating system services..."
+    echo "  [5/6] Waiting for Android runtime to boot..."
+    sleep 5
+    local booted=0
+    for i in $(seq 1 45); do
+        BOOT=$($ADB shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || echo "")
+        if [ "$BOOT" = "1" ]; then
+            booted=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$booted" -eq 1 ]; then
+        echo "    ✅ Android boot complete!"
+        $ADB shell settings put secure android_id "$NEW_ANDROID_ID" 2>/dev/null || true
+    else
+        echo "    ⚠️ Android boot completed flag still pending."
+    fi
+
+    echo "  [6/6] Broadcasting boot completion signal..."
     $ADB shell am broadcast -a android.intent.action.BOOT_COMPLETED 2>/dev/null || true
     sleep 2
 
@@ -677,7 +704,7 @@ reset_device_identity() {
     [ "$VERIFY_SERIAL" = "$NEW_SERIAL" ] && \
     [ "$VERIFY_ANDROID_ID" = "$NEW_ANDROID_ID" ] && \
         echo "    🎯 Identity reset PERFECT" || \
-        echo "    ⚠️ Reboot may be required to enforce telephony props"
+        echo "    ⚠️ Properties mismatch"
 
     echo ""
     echo "  ✅ Device identity reset complete"
