@@ -1,0 +1,32 @@
+{
+    "MANUFACTURER": "Google",
+    "MODEL": "Pixel 9 Pro",
+    "FINGERPRINT": "google/caiman/caiman:14/AP2A.260505.005/15081906:user/release-keys",
+    "BRAND": "google",
+    "PRODUCT": "caiman",
+    "DEVICE": "caiman",
+    "RELEASE": "14",
+    "ID": "AP2A.260505.005",
+    "INCREMENTAL": "15081906",
+    "TYPE": "user",
+    "TAGS": "release-keys",
+    "SECURITY_PATCH": "2026-05-05",
+    "DEVICE_INITIAL_SDK_INT": "34",
+
+    "BOARD": "caiman",
+    "HARDWARE": "tensor",
+    "SOC_MANUFACTURER": "Google",
+    "SOC_MODEL": "Tensor G4",
+
+    "FIRST_API_LEVEL": 34,
+    "BUILD_ID": "AP2A.260505.005",
+
+    "spoofBuild": true,
+    "spoofProps": true,
+    "spoofProvider": true,
+    "spoofSignature": true,
+
+    "verboseLogs": false,
+
+    "_NOTE": "ARCHIVED — replaced by pif_redfin.json (Pixel 5 / redfin / SDK 30)"
+}

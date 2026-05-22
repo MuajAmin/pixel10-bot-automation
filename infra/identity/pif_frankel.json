@@ -1,0 +1,30 @@
+{
+    "MANUFACTURER": "Google",
+    "MODEL": "Pixel 10 Pro",
+    "FINGERPRINT": "google/franklin/franklin:16/BP1A.251205.010/12847291:user/release-keys",
+    "BRAND": "google",
+    "PRODUCT": "franklin",
+    "DEVICE": "franklin",
+    "RELEASE": "16",
+    "ID": "BP1A.251205.010",
+    "INCREMENTAL": "12847291",
+    "TYPE": "user",
+    "TAGS": "release-keys",
+    "SECURITY_PATCH": "2025-12-05",
+    "DEVICE_INITIAL_SDK_INT": "36",
+
+    "BOARD": "franklin",
+    "HARDWARE": "tensor",
+    "SOC_MANUFACTURER": "Google",
+    "SOC_MODEL": "Tensor G5",
+
+    "FIRST_API_LEVEL": 36,
+    "BUILD_ID": "BP1A.251205.010",
+
+    "spoofBuild": true,
+    "spoofProps": true,
+    "spoofProvider": true,
+    "spoofSignature": true,
+
+    "verboseLogs": false
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "gmail": "account1@gmail.com",
+    "password": "password1",
+    "totp_secret": ""
+  },
+  {
+    "gmail": "account2@gmail.com",
+    "password": "password2",
+    "totp_secret": ""
+  }
+]

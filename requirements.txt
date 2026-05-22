@@ -1,0 +1,15 @@
+# Telegram Bot
+python-telegram-bot>=21.0
+
+# HTTP Client (for remote VPS API communication)
+aiohttp>=3.9.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Database
+motor>=3.3.0
+pymongo>=4.6.0
+
+# TOTP 2FA code generation
+pyotp>=2.9.0

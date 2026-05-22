@@ -1,0 +1,56 @@
+# Gemini Pixel Offer Claim Bot — Private Repository (github.com/MuajAmin/BDGemini)
+# Even though this repo is PRIVATE, secrets (passwords, tokens, API keys)
+# should never be committed. Use .env files instead.
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# Environment & secrets
+api.env
+*.env
+!*.env.example
+infra/.env
+infra/keybox.xml
+
+# One-off VPS deploy/fix/debug scripts (contain or read secrets)
+infra/vps_*.py
+
+# Downloaded Magisk modules (re-downloaded at setup time)
+infra/magisk_modules/
+
+# Data & runtime artifacts
+accounts.json
+data/
+!data/.gitkeep
+screenshots/
+infra/data/
+infra/screenshots/
+infra/logs/
+
+# Deploy config (contains secrets)
+deploy.json
+
+# Testing & linting cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Prop modules (reference only — values are in system.prop)
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store

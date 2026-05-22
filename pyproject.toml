@@ -1,0 +1,29 @@
+[project]
+name = "autolobot"
+version = "1.0.0"
+description = "Google Gemini Offer Bot — Telegram-based automated Gmail verification & offer claiming"
+requires-python = ">=3.10"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",   # line too long — handled by formatter
+    "RUF012", # mutable class variables — false positives on dicts
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["bot"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

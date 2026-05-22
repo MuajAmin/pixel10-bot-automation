@@ -1,0 +1,36 @@
+# ═══════════════════════════════════════════════════════════════════
+#  Proton VPN WireGuard Configuration Template
+#
+#  HOW TO GET YOUR CONFIG:
+#    1. Log in to Proton VPN at account.protonvpn.com
+#    2. Go to Downloads → WireGuard configuration
+#    3. Select a server (choose closest to your target region)
+#    4. Generate config and download
+#    5. Copy the contents below and save as config/proton.conf
+#
+#  DNS: Proton's 10.2.0.1 is enforced at both WireGuard level
+#       and docker-compose level to prevent DNS leaks.
+#
+#  IMPORTANT: Never commit this file with real keys to git!
+#             Add config/proton.conf to .gitignore
+# ═══════════════════════════════════════════════════════════════════
+
+[Interface]
+# Your Proton VPN WireGuard private key
+PrivateKey = REPLACE_WITH_YOUR_PRIVATE_KEY
+
+# VPN tunnel address (assigned by Proton)
+Address = 10.2.0.2/32
+
+# Proton's secure DNS resolver — prevents DNS leaks
+DNS = 10.2.0.1
+
+[Peer]
+# Proton VPN server public key
+PublicKey = REPLACE_WITH_SERVER_PUBLIC_KEY
+
+# Route ALL traffic through VPN (full tunnel)
+AllowedIPs = 0.0.0.0/0
+
+# Proton VPN server endpoint
+Endpoint = REPLACE_WITH_SERVER_IP:51820

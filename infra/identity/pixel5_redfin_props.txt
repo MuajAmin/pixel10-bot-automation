@@ -1,0 +1,136 @@
+# ═══════════════════════════════════════════════════════════════════
+#  Pixel 5 (Redfin) — Complete System Properties Reference
+#  Target OS: Android 11 (R) / SDK 30 / Build RQ3A.210805.001.A1
+#
+#  This file is the SINGLE SOURCE OF TRUTH for all Pixel 5 props
+#  injected across:
+#    - docker-compose.yml (boot-time command args)
+#    - harden_device.sh   (post-boot resetprop injection)
+#    - device.py          (runtime apply_runtime_props())
+#    - pif.json           (PlayIntegrityFix fingerprint)
+#
+#  Device:    Google Pixel 5
+#  Codename:  redfin
+#  SoC:       Qualcomm Snapdragon 765G (SM7250 / lito)
+#  GPU:       Adreno 620
+#  Shipped:   October 2020 with Android 11
+#  Last updated: 2026-05-21
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Product Identity (global) ──
+ro.product.brand=google
+ro.product.manufacturer=Google
+ro.product.model=Pixel 5
+ro.product.device=redfin
+ro.product.name=redfin
+ro.build.product=redfin
+ro.product.board=redfin
+
+# ── System Partition Identity ──
+ro.product.system.brand=google
+ro.product.system.device=redfin
+ro.product.system.manufacturer=Google
+ro.product.system.model=Pixel 5
+ro.product.system.name=redfin
+
+# ── Vendor Partition Identity ──
+ro.product.vendor.brand=google
+ro.product.vendor.device=redfin
+ro.product.vendor.manufacturer=Google
+ro.product.vendor.model=Pixel 5
+ro.product.vendor.name=redfin
+
+# ── ODM Partition Identity ──
+ro.product.odm.brand=google
+ro.product.odm.device=redfin
+ro.product.odm.manufacturer=Google
+ro.product.odm.model=Pixel 5
+ro.product.odm.name=redfin
+
+# ── Product Partition Identity ──
+ro.product.product.brand=google
+ro.product.product.device=redfin
+ro.product.product.manufacturer=Google
+ro.product.product.model=Pixel 5
+ro.product.product.name=redfin
+
+# ── Build Info ──
+ro.build.fingerprint=google/redfin/redfin:11/RQ3A.210805.001.A1/7474174:user/release-keys
+ro.build.display.id=RQ3A.210805.001.A1
+ro.build.id=RQ3A.210805.001.A1
+ro.build.description=redfin-user 11 RQ3A.210805.001.A1 7474174 release-keys
+ro.build.version.release=11
+ro.build.version.sdk=30
+ro.build.version.incremental=7474174
+ro.build.version.security_patch=2021-08-05
+ro.build.version.codename=REL
+ro.build.type=user
+ro.build.tags=release-keys
+ro.build.flavor=redfin-user
+
+# ── Hardware / SoC (Qualcomm Snapdragon 765G) ──
+ro.hardware=redfin
+ro.board.platform=lito
+ro.soc.manufacturer=Qualcomm
+ro.soc.model=SM7250
+ro.hardware.egl=adreno
+ro.hardware.vulkan=adreno
+ro.hardware.keystore=trusty
+ro.hardware.gatekeeper=trusty
+ro.boot.hardware=redfin
+ro.boot.hardware.sku=redfin
+ro.boot.product.hardware.sku=redfin
+ro.boot.hardware.revision=MP1.0
+ro.boot.slot_suffix=_a
+
+# ── Bootloader / Baseband ──
+ro.bootloader=c2f2-0.4-7617406
+gsm.version.baseband=g7250-00177-210607-B-7455850
+
+# ── Pixel-Specific Feature Eligibility ──
+ro.opa.eligible_device=true
+ro.product.first_api_level=30
+
+# ── Anti-Emulator / Security State ──
+ro.kernel.qemu=0
+ro.kernel.qemu.gles=0
+ro.debuggable=0
+ro.secure=1
+ro.adb.secure=1
+ro.force.debuggable=0
+ro.boot.verifiedbootstate=green
+ro.boot.flash.locked=1
+ro.boot.vbmeta.device_state=locked
+ro.boot.veritymode=enforcing
+sys.oem_unlock_allowed=0
+ro.oem_unlock_supported=0
+ro.build.selinux=1
+ro.secureboot.lockstate=locked
+ro.secureboot.devicelock=1
+
+# ── Encryption / Storage ──
+ro.crypto.state=encrypted
+ro.crypto.type=file
+
+# ── Google Play Services Identity ──
+ro.com.google.gmsversion=11_202108
+ro.com.google.clientidbase=android-google
+ro.com.google.clientidbase.ms=android-google
+ro.com.google.clientidbase.vs=android-google
+ro.com.google.clientidbase.am=android-google
+
+# ── Locale / Timezone ──
+persist.sys.timezone=Asia/Dhaka
+persist.sys.language=en
+persist.sys.country=BD
+ro.product.locale=en-BD
+
+# ── ARM ABI (real Pixel — ARM only) ──
+ro.product.cpu.abilist=arm64-v8a,armeabi-v7a,armeabi
+ro.product.cpu.abilist64=arm64-v8a
+ro.product.cpu.abilist32=armeabi-v7a,armeabi
+
+# ── Device Provisioning ──
+persist.sys.device_provisioned=1
+gsm.sim.operator.alpha=
+gsm.sim.state=ABSENT

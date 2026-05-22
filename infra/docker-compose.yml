@@ -1,0 +1,162 @@
+# Gemini Pixel Offer Claim Bot — Production Stack
+# 
+# Network model (ReDroid routed through Gluetun VPN container):
+#   ┌────────────────────────────────────────────────────────┐
+#   │  VPS Host                                              │
+#   │                                                        │
+#   │  ┌───────────────┐                                     │
+#   │  │    gluetun    │◄────── WireGuard VPN Tunnel         │
+#   │  │  VPN Gateway  │                                     │
+#   │  └───────┬───────┘                                     │
+#   │          │ (Shares Network Namespace)                  │
+#   │  ┌───────▼───────┐                                     │
+#   │  │    ReDroid    │  All traffic secure & encrypted,    │
+#   │  │   Android 11  │  Proton secure DNS (10.2.0.1) active│
+#   │  └───────────────┘                                     │
+#   │                                                        │
+#   │  ┌───────────────┐  host networking                    │
+#   │  │  worker-api   │  ADB → 127.0.0.1:5555               │
+#   │  │  :8800 API    │  (Port mapped from Gluetun)         │
+#   │  └───────────────┘                                     │
+#   └────────────────────────────────────────────────────────┘
+#
+# Prerequisite: Place paid Proton VPN WireGuard config in infra/wireguard/main.conf
+
+version: "3.8"
+
+volumes:
+  redroid-data:
+
+services:
+  # ── Gluetun VPN Gatekeeper ────────────────────────────────────
+  gluetun:
+    image: qmcgaw/gluetun:v3
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "127.0.0.1:5555:5555"       # ADB port exposed safely on host loopback
+    volumes:
+      - ./wireguard/main.conf:/gluetun/wireguard/wg0.conf:ro  # Mount custom WireGuard conf
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - VPN_DNS_ADDRESS=10.2.0.1     # Force Proton Secure DNS
+      - FIREWALL=on                  # Kill switch enabled to prevent network leaks
+      - DNS_KEEP_NAMESERVER=off      # Use local Unbound resolver to route DNS over VPN
+      - HEALTH_RESTART_VPN=off
+    restart: always
+
+  # ── ReDroid — Headless Android 11 (Pixel 5 / redfin) ──────────
+  redroid:
+    image: ${REDROID_IMAGE:?Set REDROID_IMAGE in infra/.env to the custom GApps/Magisk/NDK image built with redroid.py -a 11.0.0 -gmnw}
+    container_name: pixel10-android
+    privileged: true
+    network_mode: "container:gluetun"  # Shares network namespace with Gluetun
+    volumes:
+      - redroid-data:/data
+      - /dev/binderfs:/dev/binderfs
+    command:
+      # Core display
+      - androidboot.redroid_width=720
+      - androidboot.redroid_height=1280
+      - androidboot.redroid_dpi=320
+      - androidboot.redroid_fps=30
+
+      # VPS has no GPU; use software rendering (swiftshader).
+      - androidboot.redroid_gpu_mode=guest
+
+      # Locale / timezone — USA (Miami, FL) to match VPN exit
+      - persist.sys.timezone=America/New_York
+      - persist.sys.language=en
+      - persist.sys.country=US
+      - ro.product.locale=en-US
+
+      # Pixel 5 (redfin) identity — props with spaces set via resetprop.
+      - ro.product.brand=google
+      - ro.product.device=redfin
+      - ro.product.manufacturer=Google
+      - ro.product.name=redfin
+      - ro.product.board=redfin
+
+      # System partition
+      - ro.product.system.brand=google
+      - ro.product.system.device=redfin
+      - ro.product.system.manufacturer=Google
+      - ro.product.system.name=redfin
+
+      # Vendor partition
+      - ro.product.vendor.brand=google
+      - ro.product.vendor.device=redfin
+      - ro.product.vendor.manufacturer=Google
+      - ro.product.vendor.name=redfin
+
+      # Build info
+      - ro.build.display.id=RQ3A.210805.001.A1
+      - ro.build.id=RQ3A.210805.001.A1
+      - ro.build.type=user
+      - ro.build.tags=release-keys
+      - ro.build.flavor=redfin-user
+      - ro.build.version.codename=REL
+
+      # Google identity
+      - ro.com.google.clientidbase=android-google
+      - ro.opa.eligible_device=true
+
+      # Anti-emulator
+      - ro.kernel.qemu=0
+      - ro.kernel.qemu.gles=0
+      - ro.boot.verifiedbootstate=green
+      - ro.boot.flash.locked=1
+      - ro.boot.vbmeta.device_state=locked
+
+      # ADB open for automation; post_boot_setup.sh hardens later.
+      - ro.debuggable=1
+      - ro.secure=0
+      - ro.adb.secure=0
+
+      # Hardware / SoC (Snapdragon 765G)
+      - ro.board.platform=lito
+      - ro.boot.hardware.sku=redfin
+      - ro.hardware=redfin
+      - ro.boot.hardware=redfin
+      # Set DNS server to local Unbound resolver inside Gluetun network namespace
+      - androidboot.redroid_net_ndns=1
+      - androidboot.redroid_net_dns1=127.0.0.1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  # ── Worker API — Python automation backend ─────────────────────
+  worker-api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: pixel10-worker
+    network_mode: host
+    depends_on:
+      gluetun:
+        condition: service_started
+      redroid:
+        condition: service_started
+    env_file:
+      - ../api.env
+    environment:
+      - ADB_HOST=127.0.0.1
+      - ADB_PORT=5555
+      - ADB_CONNECT_TIMEOUT_SEC=180
+      - WORKER_API_BIND=${WORKER_API_BIND:-127.0.0.1}
+    volumes:
+      - ../data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped

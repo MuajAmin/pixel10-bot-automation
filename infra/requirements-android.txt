@@ -1,0 +1,17 @@
+# Python dependencies for the Android Worker API (VPS side)
+# Install with: pip install -r requirements-android.txt
+
+# ── Core ──
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+pydantic==2.*
+
+# ── Android Automation ──
+uiautomator2==3.*
+adbutils==2.*
+
+# ── 2FA ──
+pyotp==2.*
+
+# ── Utilities ──
+Pillow==11.*
