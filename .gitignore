@@ -55,3 +55,6 @@ deploy.json
 # OS
 Thumbs.db
 .DS_Store
+
+# VPN wireguard profiles (contain private keys)
+config/*.conf

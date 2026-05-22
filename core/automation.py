@@ -145,6 +145,9 @@ def adb_connect(adb_target: str) -> bool:
         # Kill server and restart to clean broken sockets if needed
         subprocess.run(["adb", "start-server"], capture_output=True, timeout=5)
         
+        # Disconnect phantom emulator serial to prevent duplicate serial confusion
+        subprocess.run(["adb", "disconnect", "emulator-5554"], capture_output=True, timeout=5)
+
         result = subprocess.run(
             ["adb", "connect", adb_target],
             capture_output=True,

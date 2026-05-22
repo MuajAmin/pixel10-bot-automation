@@ -155,9 +155,8 @@ def account_disabled_message() -> str:
 
 
 def admin_denied_message(telegram_id: str) -> str:
-    configured = ", ".join(sorted(ADMIN_USER_IDS)) or "none"
     return (
         "<b>Access denied</b>\n\n"
         f"Your Telegram ID: <code>{escape(telegram_id)}</code>\n"
-        f"Allowed admin IDs: <code>{escape(configured)}</code>"
+        "Please contact the system administrator if you believe this is an error."
     )

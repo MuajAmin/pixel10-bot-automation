@@ -120,10 +120,10 @@ ro.com.google.clientidbase.vs=android-google
 ro.com.google.clientidbase.am=android-google
 
 # ── Locale / Timezone ──
-persist.sys.timezone=Asia/Dhaka
+persist.sys.timezone=America/New_York
 persist.sys.language=en
-persist.sys.country=BD
-ro.product.locale=en-BD
+persist.sys.country=US
+ro.product.locale=en-US
 
 # ── ARM ABI (real Pixel — ARM only) ──
 ro.product.cpu.abilist=arm64-v8a,armeabi-v7a,armeabi

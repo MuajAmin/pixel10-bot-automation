@@ -289,7 +289,7 @@ async def handle_verify_text(
         await update.effective_message.reply_html(
             "<b>✨ Create verify</b>\n\n"
             f"✅ Gmail: <code>{escape(str(context.user_data.get('verify_gmail', '')))}</code>\n"
-            f"✅ Password: <code>{escape(password)}</code>\n\n"
+            f"✅ Password: <code>{escape('*' * len(password))}</code>\n\n"
             "<b>Choose the sign-in verification method.</b>\n\n"
             "If you choose Verify sign-in, the account must already be signed in on at least one device, "
             "and that device must have internet access to receive the Tap Yes/select-number prompt.",

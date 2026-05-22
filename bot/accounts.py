@@ -579,4 +579,15 @@ async def refund_job(telegram_id: str, job_id: str) -> bool:
         },
         array_filters=array_filters,
     )
-    return result.modified_count > 0
+    if result.modified_count > 0:
+        # Guard: Ensure deposit_spent and referral_spent do not go negative from corrupted increments
+        await users_col().update_one(
+            {"_id": telegram_id, "deposit_spent": {"$lt": 0}},
+            {"$set": {"deposit_spent": 0}}
+        )
+        await users_col().update_one(
+            {"_id": telegram_id, "referral_spent": {"$lt": 0}},
+            {"$set": {"referral_spent": 0}}
+        )
+        return True
+    return False
