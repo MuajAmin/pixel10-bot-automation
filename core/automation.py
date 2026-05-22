@@ -526,7 +526,7 @@ def robust_type(device: u2.Device, selector, text: str, field_desc: str = "Input
             pass
         # Escape special shell characters for ADB input text
         # ADB input text handles most chars but needs shell escaping
-        safe = text.replace("\\", "\\\\").replace("'", "'\"'\"'").replace(" ", "%s")
+        safe = text.replace("\\", "\\\\").replace("'", "'\"'\"'").replace(" ", "\\ ")
         device.shell(f"input text '{safe}'")
         time.sleep(0.5)
         log.info("[%s] ✅ ADB input text sent (unverified).", field_desc)
@@ -541,6 +541,7 @@ def robust_type(device: u2.Device, selector, text: str, field_desc: str = "Input
 
 def robust_click(device: u2.Device, selector, field_desc: str = "Button", timeout: int = 5) -> bool:
     """Performs click actions with coordinate-based backups if WebView selectors freeze."""
+    bounds = {}
     try:
         if selector.exists(timeout=timeout):
             # Fetch coordinates for backup before clicking
