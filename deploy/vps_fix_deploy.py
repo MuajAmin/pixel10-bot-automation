@@ -13,7 +13,16 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-VPS = ("203.161.39.181", 22022, "root", "Muaj1324@")
+import json
+from pathlib import Path
+
+def load_vps_tuple():
+    path = Path(__file__).resolve().parent.parent / "deploy.json"
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    return cfg["vps_host"], int(cfg["vps_port"]), cfg["vps_user"], cfg["vps_password"]
+
+VPS = load_vps_tuple()
 REMOTE = "/root/pixel10-bot-automation"
 LOCAL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
