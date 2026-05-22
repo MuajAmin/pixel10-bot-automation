@@ -122,9 +122,10 @@ services:
       - ro.boot.hardware.sku=redfin
       - ro.hardware=redfin
       - ro.boot.hardware=redfin
-      # Set DNS server to local Unbound resolver inside Gluetun network namespace
-      - androidboot.redroid_net_ndns=1
-      - androidboot.redroid_net_dns1=127.0.0.1
+      # Set DNS server to public DNS resolvers (routed via Gluetun VPN)
+      - androidboot.redroid_net_ndns=2
+      - androidboot.redroid_net_dns1=8.8.8.8
+      - androidboot.redroid_net_dns2=1.1.1.1
     logging:
       driver: json-file
       options:
@@ -160,6 +161,8 @@ services:
       - WORKER_API_BIND=${WORKER_API_BIND:-127.0.0.1}
     volumes:
       - ../data:/app/data
+      - ../screenshots:/app/screenshots
+      - ../logs:/app/logs
     logging:
       driver: json-file
       options:

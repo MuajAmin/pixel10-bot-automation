@@ -35,9 +35,17 @@ if [ -z "$GATEWAY" ]; then
     GATEWAY=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' "$CONTAINER" | head -n1 || true)
 fi
 
-echo "=== VPN Routing Fix ==="
-echo "WireGuard endpoint: $ENDPOINT_IP"
 echo "Gateway: $GATEWAY"
+
+# Add default gateway to main table for Android's ipconfigstore to discover it on boot
+if [ -n "$GATEWAY" ]; then
+    if ! docker exec "$CONTAINER" ip route show | grep -q "default via $GATEWAY"; then
+        docker exec "$CONTAINER" ip route add default via "$GATEWAY" dev eth0 || true
+        echo "✅ Added default gateway to main table: default via $GATEWAY"
+    else
+        echo "ℹ️  Default gateway already exists in main table"
+    fi
+fi
 
 # Add bypass rule for local Docker subnet so host/container communications (e.g. ADB, API) don't get routed over VPN.
 SUBNET=$(docker exec "$CONTAINER" ip route show dev eth0 2>/dev/null | grep proto | awk '{print $1}' || true)

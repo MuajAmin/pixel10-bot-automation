@@ -618,32 +618,24 @@ def step2_swap_and_login(
     adb_target: str,
     job_id: str,
 ) -> tuple:
-    """Applies temporary Android 16/Pixel 10 Pro props, opens account login screen and navigates auth.
+    """Trigger Google Account login under the stable Pixel 5 base layer.
     
     Returns:
-        Tuple of (status_str, device_handle). The device handle may be refreshed
-        after prop swap to recover from DeadSystemException.
+        Tuple of (status_str, device_handle).
     """
-    log.info("━━━ STEP 2: Swapping to Pixel 10 Pro & Triggering Google Login ━━━")
+    log.info("━━━ STEP 2: Triggering Google Login under Pixel 5 Base Layer ━━━")
     
-    if not run_build_props("swap", adb_target):
-        log.error("STEP 2 FAILED: Could not apply Pixel 10 Pro login signature.")
+    if not run_build_props("base", adb_target):
+        log.error("STEP 2 FAILED: Could not confirm base Pixel 5 footprint.")
         return "ERROR", device
 
-    # The force-stop of GMS/GSF during swap causes a transient DeadSystemException
-    # in the Android DisplayManager. We MUST wait for system recovery and re-acquire
-    # the uiautomator2 device handle before any UI interaction.
-    log.info("Prop swap complete. Waiting for system stabilization after force-stop...")
-    time.sleep(10)
-
-    # Re-acquire device handle — the old one holds stale RPC state from DeadSystemException
-    log.info("Re-acquiring uiautomator2 device handle after swap...")
+    # No swap is performed, so we do not expect DeadSystemException.
+    # We quickly ensure the uiautomator2 handle is active.
     try:
-        device = get_robust_device(adb_target, timeout_sec=60)
-        log.info("✅ Fresh uiautomator2 handle acquired post-swap.")
+        device = get_robust_device(adb_target, timeout_sec=30)
+        log.info("✅ uiautomator2 handle verified/re-acquired.")
     except Exception as exc:
-        log.error("Failed to re-acquire device handle after swap: %s", exc)
-        return "ERROR", device
+        log.warning("Could not re-verify device handle, proceeding: %s", exc)
 
     # Retry loop for ADD_ACCOUNT_SETTINGS — system may need multiple attempts to stabilize
     google_found = False
