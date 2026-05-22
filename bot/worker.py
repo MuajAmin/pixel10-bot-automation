@@ -244,24 +244,8 @@ async def _run_android_job(
         except Exception:
             pass  # Telegram edit failures are non-critical
 
-    # Ensure VPN routing is correctly fixed before launching job
-    try:
-        logger.info("Applying VPN routing fix before starting job %s", job_id)
-        proc = await asyncio.create_subprocess_exec(
-            "/root/pixel10-bot-automation/infra/fix_vpn_routing.sh",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode == 0:
-            logger.info("VPN routing fix applied successfully for job %s", job_id)
-        else:
-            logger.warning(
-                "VPN routing fix returned non-zero code %d for job %s: %s",
-                proc.returncode, job_id, stderr.decode().strip()
-            )
-    except Exception as e:
-        logger.error("Failed to run VPN routing fix: %s", e)
+    # VPN routing is maintained by the host-level vpn_keeper.sh daemon
+    logger.info("VPN routing maintained by host daemon for job %s", job_id)
 
     try:
         result = await run_android_job_remote(

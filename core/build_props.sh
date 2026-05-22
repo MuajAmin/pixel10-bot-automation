@@ -39,7 +39,7 @@ fi
 set -euo pipefail
 
 ACTION="${1:-base}"
-ADB_TARGET="${2:-localhost:5555}"
+ADB_TARGET="${2:-127.0.0.1:5555}"
 ADB="adb -s $ADB_TARGET"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"

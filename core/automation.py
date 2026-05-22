@@ -617,27 +617,55 @@ def step2_swap_and_login(
     password: str,
     adb_target: str,
     job_id: str,
-) -> str:
-    """Applies temporary Android 16/Pixel 10 Pro props, opens account login screen and navigates auth."""
+) -> tuple:
+    """Applies temporary Android 16/Pixel 10 Pro props, opens account login screen and navigates auth.
+    
+    Returns:
+        Tuple of (status_str, device_handle). The device handle may be refreshed
+        after prop swap to recover from DeadSystemException.
+    """
     log.info("━━━ STEP 2: Swapping to Pixel 10 Pro & Triggering Google Login ━━━")
     
     if not run_build_props("swap", adb_target):
         log.error("STEP 2 FAILED: Could not apply Pixel 10 Pro login signature.")
-        return "ERROR"
+        return "ERROR", device
 
-    # No framework restart — build_props.sh swap uses force-stop + relaunch (no reboot)
-    log.info("Prop swap complete. Device handle remains valid (no framework restart).")
+    # The force-stop of GMS/GSF during swap causes a transient DeadSystemException
+    # in the Android DisplayManager. We MUST wait for system recovery and re-acquire
+    # the uiautomator2 device handle before any UI interaction.
+    log.info("Prop swap complete. Waiting for system stabilization after force-stop...")
+    time.sleep(10)
 
-    log.info("Firing native ADD_ACCOUNT settings intent...")
-    device.shell("am start -a android.settings.ADD_ACCOUNT_SETTINGS")
-    human_delay(3.0, 5.0)
+    # Re-acquire device handle — the old one holds stale RPC state from DeadSystemException
+    log.info("Re-acquiring uiautomator2 device handle after swap...")
+    try:
+        device = get_robust_device(adb_target, timeout_sec=60)
+        log.info("✅ Fresh uiautomator2 handle acquired post-swap.")
+    except Exception as exc:
+        log.error("Failed to re-acquire device handle after swap: %s", exc)
+        return "ERROR", device
 
-    # Click Google Account type
-    google_btn = device(text="Google") if device(text="Google").exists() else device(textContains="oogle")
-    if not robust_click(device, google_btn, "Google Settings Selector", timeout=10):
-        log.error("Google entry option was not detected in system menu.")
+    # Retry loop for ADD_ACCOUNT_SETTINGS — system may need multiple attempts to stabilize
+    google_found = False
+    for add_acct_attempt in range(3):
+        log.info("Firing native ADD_ACCOUNT settings intent (attempt %d/3)...", add_acct_attempt + 1)
+        device.shell("am start -a android.settings.ADD_ACCOUNT_SETTINGS")
+        human_delay(4.0, 6.0)
+
+        # Click Google Account type
+        google_btn = device(text="Google") if device(text="Google").exists() else device(textContains="oogle")
+        if robust_click(device, google_btn, "Google Settings Selector", timeout=10):
+            google_found = True
+            break
+        
+        log.warning("Google entry not found on attempt %d, retrying after stabilization...", add_acct_attempt + 1)
+        device.press("back")
+        time.sleep(5)
+    
+    if not google_found:
+        log.error("Google entry option was not detected in system menu after 3 attempts.")
         take_screenshot(device, job_id, "no_google_option")
-        return "FAILED"
+        return "FAILED", device
 
     log.info("Waiting for login WebView context to boot...")
     human_delay(6.0, 10.0)
@@ -657,7 +685,7 @@ def step2_swap_and_login(
     if not email_entered:
         log.error("Gmail WebView input field failed to render.")
         take_screenshot(device, job_id, "no_email_field")
-        return "FAILED"
+        return "FAILED", device
 
     human_delay(1.0, 2.0)
     next_btn = device(text="Next") if device(text="Next").exists() else device(className="android.widget.Button")
@@ -679,14 +707,14 @@ def step2_swap_and_login(
         log.critical("Google detected bot fingerprint and locked sign-in.")
         take_screenshot(device, job_id, "unsafe_login")
         print("[STATUS]: LOGIN_FAILED")
-        return "UNSAFE"
+        return "UNSAFE", device
 
     if state == "PASSWORD":
         el = device(resourceId="password") if device(resourceId="password").exists() else device(className="android.widget.EditText")
         if not robust_type(device, el, password, "Password Field"):
             log.error("Failed to inject password text.")
             take_screenshot(device, job_id, "no_password_field")
-            return "FAILED"
+            return "FAILED", device
 
         human_delay(1.0, 2.0)
         next_btn = device(text="Next") if device(text="Next").exists() else device(className="android.widget.Button")
@@ -711,7 +739,7 @@ def step2_swap_and_login(
 
         if state not in ("SUCCESS", "TOS"):
             log.error("2FA response timed out.")
-            return "FAILED"
+            return "FAILED", device
 
     # ── AGREEMENT / TOS CHECKS ──
     for i in range(4):
@@ -744,12 +772,12 @@ def step2_swap_and_login(
     if state == "SUCCESS":
         log.info("✅ Google sign-in successful for: %s", gmail)
         print("[STATUS]: LOGIN_SUCCESS")
-        return "SUCCESS"
+        return "SUCCESS", device
     else:
         log.error("Authentication outcome undefined. Current screen state: %s", state)
         take_screenshot(device, job_id, "login_unclear")
         print("[STATUS]: LOGIN_FAILED")
-        return "FAILED"
+        return "FAILED", device
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1067,10 +1095,10 @@ def run_pipeline(
             return result
 
         # STEP 2: Auth sequence
-        login_res = step2_swap_and_login(device, gmail, password, adb_target, job_id)
+        login_res, device = step2_swap_and_login(device, gmail, password, adb_target, job_id)
         
-        # Device handle remains valid — Step 2 swap no longer restarts the framework
-        log.info("Post-login: device handle still active (no framework restart during swap).")
+        # Device handle is refreshed inside step2 after prop swap to recover from DeadSystemException
+        log.info("Post-login: using refreshed device handle from step2.")
         
         if login_res != "SUCCESS":
             result["status"] = login_res
