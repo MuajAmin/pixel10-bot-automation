@@ -59,70 +59,82 @@ services:
       - redroid-data:/data
       - /dev/binderfs:/dev/binderfs
     command:
-      # Core display
-      - androidboot.redroid_width=720
-      - androidboot.redroid_height=1280
-      - androidboot.redroid_dpi=320
-      - androidboot.redroid_fps=30
+      # ── Display ──
+      - androidboot.redroid_width=1080
+      - androidboot.redroid_height=1920
+      - androidboot.redroid_dpi=420
+      - androidboot.redroid_fps=60
 
-      # VPS has no GPU; use software rendering (swiftshader).
+      # ── Rendering ──
       - androidboot.redroid_gpu_mode=guest
 
-      # Locale / timezone — USA (Miami, FL) to match VPN exit
+      # ── Locale ──
       - persist.sys.timezone=America/New_York
       - persist.sys.language=en
       - persist.sys.country=US
       - ro.product.locale=en-US
 
-      # Pixel 5 (redfin) identity — props with spaces set via resetprop.
+      # ── Pixel 10 Pro XL (mustang) — Device Identity ──
       - ro.product.brand=google
-      - ro.product.device=redfin
       - ro.product.manufacturer=Google
-      - ro.product.name=redfin
-      - ro.product.board=redfin
+      - ro.product.model=Pixel 10 Pro XL
+      - ro.product.name=mustang
+      - ro.product.device=mustang
+      - ro.product.board=mustang
 
       # System partition
       - ro.product.system.brand=google
-      - ro.product.system.device=redfin
       - ro.product.system.manufacturer=Google
-      - ro.product.system.name=redfin
+      - ro.product.system.model=Pixel 10 Pro XL
+      - ro.product.system.name=mustang
+      - ro.product.system.device=mustang
 
       # Vendor partition
       - ro.product.vendor.brand=google
-      - ro.product.vendor.device=redfin
       - ro.product.vendor.manufacturer=Google
-      - ro.product.vendor.name=redfin
+      - ro.product.vendor.model=Pixel 10 Pro XL
+      - ro.product.vendor.name=mustang
+      - ro.product.vendor.device=mustang
 
-      # Build info
-      - ro.build.display.id=RQ3A.210805.001.A1
+      # Product partition
+      - ro.product.product.brand=google
+      - ro.product.product.manufacturer=Google
+      - ro.product.product.model=Pixel 10 Pro XL
+      - ro.product.product.name=mustang
+      - ro.product.product.device=mustang
+
+      # ── Build / Fingerprint (SDK 30 Alignment for Android 11 base) ──
       - ro.build.id=RQ3A.210805.001.A1
+      - ro.build.display.id=RQ3A.210805.001.A1
+      - ro.build.flavor=redfin-user
       - ro.build.type=user
       - ro.build.tags=release-keys
-      - ro.build.flavor=redfin-user
+      - ro.build.version.sdk=30
       - ro.build.version.codename=REL
 
-      # Google identity
+      # ── Google Service Identity ──
       - ro.com.google.clientidbase=android-google
       - ro.opa.eligible_device=true
 
-      # Anti-emulator
+      # ── Anti-Emulator Detection ──
       - ro.kernel.qemu=0
       - ro.kernel.qemu.gles=0
       - ro.boot.verifiedbootstate=green
       - ro.boot.flash.locked=1
       - ro.boot.vbmeta.device_state=locked
 
-      # ADB open for automation; post_boot_setup.sh hardens later.
-      - ro.debuggable=1
+      # ── Security / ADB ──
       - ro.secure=0
       - ro.adb.secure=0
+      - ro.debuggable=1
 
-      # Hardware / SoC (Snapdragon 765G)
+      # ── Hardware / SoC (Snapdragon 765G — Compatible HALs) ──
       - ro.board.platform=lito
       - ro.boot.hardware.sku=redfin
       - ro.hardware=redfin
       - ro.boot.hardware=redfin
-      # Set DNS server to Proton secure DNS (routed via Gluetun VPN)
+
+      # ── DNS — Proton Secure DNS (routed via Gluetun) ──
       - androidboot.redroid_net_ndns=2
       - androidboot.redroid_net_dns1=10.2.0.1
       - androidboot.redroid_net_dns2=10.2.0.1

@@ -20,13 +20,6 @@ logger = logging.getLogger(__name__)
 ANDROID_WORKER_URL = os.getenv("ANDROID_WORKER_URL", "http://localhost:8800")
 ANDROID_WORKER_API_KEY = os.getenv("ANDROID_WORKER_API_KEY", "changeme")
 
-# Fail-fast: refuse to start with the default key
-if ANDROID_WORKER_API_KEY in ("changeme", ""):
-    raise RuntimeError(
-        "ANDROID_WORKER_API_KEY is not configured. Set it in your .env file "
-        "to match the API_KEY on the worker VPS."
-    )
-
 # Poll interval when waiting for job completion (seconds)
 _POLL_INTERVAL = 5
 # Maximum time to wait for a job to complete (seconds)
@@ -42,6 +35,11 @@ _session: aiohttp.ClientSession | None = None
 def _get_session() -> aiohttp.ClientSession:
     """Return (or create) the shared aiohttp session for connection reuse."""
     global _session
+    if ANDROID_WORKER_API_KEY in ("changeme", ""):
+        raise RuntimeError(
+            "ANDROID_WORKER_API_KEY is not configured. Set it in your .env file "
+            "to match the API_KEY on the worker VPS."
+        )
     if _session is None or _session.closed:
         _session = aiohttp.ClientSession(
             headers={

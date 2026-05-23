@@ -149,6 +149,16 @@ class JobResult(BaseModel):
 
 # ── Endpoints ────────────────────────────────────────────────────
 
+@app.get("/")
+async def root():
+    """Root endpoint returning API status and details."""
+    return {
+        "name": "Gemini Pixel Offer Claim Bot Android Worker API",
+        "status": "online",
+        "version": "1.0.0"
+    }
+
+
 @app.get("/healthz")
 async def healthz():
     """Unauthenticated liveness probe for Docker/Kubernetes healthchecks."""

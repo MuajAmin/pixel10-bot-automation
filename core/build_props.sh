@@ -205,6 +205,7 @@ apply_pixel5_base() {
     set_prop "ro.boot.slot_suffix"             "_a"
     set_prop "ro.bootloader"                   "c2f2-0.4-7617406"
     set_prop "gsm.version.baseband"            "g7250-00177-210607-B-7455850"
+    set_prop "ro.hardware.egl"                 "adreno"
 
     # Anti-emulator
     set_prop "ro.kernel.qemu"                  "0"
@@ -261,13 +262,13 @@ apply_pixel5_base() {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-#  PIXEL 10 PRO SWAP (for Google One only)
+#  PIXEL 10 PRO XL SWAP (for Google One only)
 # ═══════════════════════════════════════════════════════════════════
 swap_pixel10_pro() {
     echo ""
-    echo "━━━ PROP SWAP: Pixel 10 Pro (franklin) ━━━"
+    echo "━━━ PROP SWAP: Pixel 10 Pro XL (mustang) ━━━"
 
-    local CODENAME="${PIXEL10_CODENAME:-franklin}"
+    local CODENAME="${PIXEL10_CODENAME:-mustang}"
     local BUILD_ID="BP1A.251205.010"
     local INCREMENTAL="12847291"
     local FP="google/${CODENAME}/${CODENAME}:16/${BUILD_ID}/${INCREMENTAL}:user/release-keys"
@@ -278,14 +279,14 @@ swap_pixel10_pro() {
     $ADB shell am force-stop com.google.android.apps.subscriptions.red 2>/dev/null || true
     sleep 1
 
-    echo "  Swapping to Pixel 10 Pro..."
+    echo "  Swapping to Pixel 10 Pro XL..."
 
-    # Product identity → Pixel 10 Pro (all partitions)
+    # Product identity → Pixel 10 Pro XL (all partitions)
     for pfx in "" ".system" ".vendor" ".odm" ".product"; do
         set_prop "ro.product${pfx}.brand"        "google"
         set_prop "ro.product${pfx}.device"       "$CODENAME"
         set_prop "ro.product${pfx}.manufacturer" "Google"
-        set_prop "ro.product${pfx}.model"        "Pixel 10 Pro"
+        set_prop "ro.product${pfx}.model"        "Pixel 10 Pro XL"
         set_prop "ro.product${pfx}.name"         "$CODENAME"
     done
 
@@ -304,14 +305,15 @@ swap_pixel10_pro() {
     set_prop "ro.build.flavor"                 "${CODENAME}-user"
     set_prop "ro.build.product"                "$CODENAME"
 
-    # Hardware → Tensor G5
-    set_prop "ro.hardware"                     "tensor"
-    set_prop "ro.board.platform"               "gs601"
+    # Hardware → Tensor G5 / Mustang
+    set_prop "ro.hardware"                     "mustang"
+    set_prop "ro.board.platform"               "laguna"
     set_prop "ro.soc.manufacturer"             "Google"
     set_prop "ro.soc.model"                    "Tensor G5"
-    set_prop "ro.boot.hardware"                "tensor"
+    set_prop "ro.boot.hardware"                "mustang"
     set_prop "ro.boot.hardware.sku"            "$CODENAME"
     set_prop "ro.boot.product.hardware.sku"    "$CODENAME"
+    set_prop "ro.hardware.egl"                 "adreno"
 
     # GMS version for Android 16
     set_prop "ro.com.google.gmsversion"        "16_202605"
@@ -321,7 +323,7 @@ swap_pixel10_pro() {
     set_prop "ro.opa.eligible_device"          "true"
     set_prop "ro.com.google.clientidbase"      "android-google"
 
-    echo "  ✅ Props swapped to Pixel 10 Pro ($CODENAME)"
+    echo "  ✅ Props swapped to Pixel 10 Pro XL ($CODENAME)"
 
     # Restart framework is disabled as it causes DeadSystemException on Android 11 with SDK 36.
     # Instead, we force-stop GMS/GSF/Vending/Google One to ensure they read the new properties on process initialization.

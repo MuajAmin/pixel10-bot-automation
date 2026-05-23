@@ -255,7 +255,13 @@ async def register_referral(current_id: str, referrer_id: str | None) -> None:
     # Atomic conditional update: only set referred_by if it's not already set.
     # This prevents race conditions from two rapid /start ref_X calls.
     result = await users_col().update_one(
-        {"_id": current_id, "referred_by": {"$exists": False}},
+        {
+            "_id": current_id,
+            "$or": [
+                {"referred_by": {"$exists": False}},
+                {"referred_by": None}
+            ]
+        },
         {"$set": {"referred_by": referrer_id}},
         upsert=False,
     )

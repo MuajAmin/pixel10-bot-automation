@@ -58,3 +58,9 @@ Thumbs.db
 
 # VPN wireguard profiles (contain private keys)
 config/*.conf
+
+# Patched Magisk binaries (downloaded at setup time via extract_magisk.sh)
+infra/patches/
+
+# ReDroid persistent data
+infra/data/android/
