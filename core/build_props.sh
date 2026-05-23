@@ -205,7 +205,7 @@ apply_pixel5_base() {
     set_prop "ro.boot.slot_suffix"             "_a"
     set_prop "ro.bootloader"                   "c2f2-0.4-7617406"
     set_prop "gsm.version.baseband"            "g7250-00177-210607-B-7455850"
-    set_prop "ro.hardware.egl"                 "adreno"
+    set_prop "ro.hardware.egl"                 "angle"
 
     # Anti-emulator
     set_prop "ro.kernel.qemu"                  "0"
@@ -313,7 +313,7 @@ swap_pixel10_pro() {
     set_prop "ro.boot.hardware"                "mustang"
     set_prop "ro.boot.hardware.sku"            "$CODENAME"
     set_prop "ro.boot.product.hardware.sku"    "$CODENAME"
-    set_prop "ro.hardware.egl"                 "adreno"
+    set_prop "ro.hardware.egl"                 "angle"
 
     # GMS version for Android 16
     set_prop "ro.com.google.gmsversion"        "16_202605"
