@@ -58,6 +58,9 @@ ensure_host_vpn() {
     mkdir -p "$SCRIPT_DIR/infra/wireguard"
     cp "$SCRIPT_DIR/config/proton.conf" "$SCRIPT_DIR/infra/wireguard/main.conf"
     cp "$SCRIPT_DIR/config/proton.conf" "$SCRIPT_DIR/infra/wireguard/proton.conf"
+    sed -i -E 's/(Address = [^,]+),.*/\1/; s/(DNS = [^,]+),.*/\1/' \
+        "$SCRIPT_DIR/infra/wireguard/main.conf" \
+        "$SCRIPT_DIR/infra/wireguard/proton.conf"
     cd "$SCRIPT_DIR/infra"
 }
 

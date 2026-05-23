@@ -26,15 +26,14 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - VPN_DNS_ADDRESS=10.2.0.1
-      - DNS_UPSTREAM_RESOLVER_TYPE=plain
-      - DNS_UPSTREAM_PLAIN_ADDRESSES=10.2.0.1:53
-      - DNS_UPDATE_PERIOD=0
+      - DNS_ADDRESS=10.2.0.1
+      - DNS_SERVER=off
       - BLOCK_MALICIOUS=off
-      - DOT=off
       - FIREWALL=on
       - DNS_KEEP_NAMESERVER=off
       - HEALTH_RESTART_VPN=off
+      - HEALTH_ICMP_TARGET_IPS=10.2.0.1
+      - PUBLICIP_ENABLED=off
     restart: unless-stopped
 
   redroid:

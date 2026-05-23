@@ -46,14 +46,13 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - VPN_DNS_ADDRESS=10.2.0.1     # Force Proton Secure DNS
-      - DNS_UPSTREAM_RESOLVER_TYPE=plain
-      - DNS_UPSTREAM_PLAIN_ADDRESSES=10.2.0.1:53
-      - DNS_UPDATE_PERIOD=0
-      - DOT=off
+      - DNS_ADDRESS=10.2.0.1          # Force shared namespace DNS to Proton Secure DNS
+      - DNS_SERVER=off                # Do not start Gluetun's default DNS forwarder
       - FIREWALL=on                  # Kill switch enabled to prevent network leaks
-      - DNS_KEEP_NAMESERVER=off      # Use local Unbound resolver to route DNS over VPN
+      - DNS_KEEP_NAMESERVER=off      # Do not inherit host resolvers
       - HEALTH_RESTART_VPN=off
+      - HEALTH_ICMP_TARGET_IPS=10.2.0.1
+      - PUBLICIP_ENABLED=off
     restart: always
 
   # ── ReDroid — Headless Android 13 (Pixel 10 Pro XL / franklin) ──────────

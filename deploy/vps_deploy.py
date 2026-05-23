@@ -264,7 +264,9 @@ def main():
         ssh,
         f"mkdir -p {REMOTE_DIR}/infra/wireguard "
         f"&& cp {REMOTE_DIR}/config/proton.conf {REMOTE_DIR}/infra/wireguard/main.conf "
-        f"&& cp {REMOTE_DIR}/config/proton.conf {REMOTE_DIR}/infra/wireguard/proton.conf",
+        f"&& cp {REMOTE_DIR}/config/proton.conf {REMOTE_DIR}/infra/wireguard/proton.conf "
+        r"&& sed -i -E 's/(Address = [^,]+),.*/\1/; s/(DNS = [^,]+),.*/\1/' "
+        f"{REMOTE_DIR}/infra/wireguard/main.conf {REMOTE_DIR}/infra/wireguard/proton.conf",
         check=True,
     )
 
