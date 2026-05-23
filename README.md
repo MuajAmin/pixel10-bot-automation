@@ -201,7 +201,7 @@ Open Telegram, search for your bot username, and send `/start` to begin using th
 
 The `deploy/` and `core/` directories contain several script utilities for maintenance and diagnostics:
 
-*   **[deploy/vps_diag.py](file:///root/pixel10-bot-automation/deploy/vps_diag.py)**: Performs diagnostics on VPS health (Docker compose status, ADB status, memory, network routing).
+*   **[deploy/vps_diag.py](file:///root/pixel10-bot-automation/deploy/vps_diag.py)**: Performs diagnostics on VPS health (Docker status, ADB status, memory, network routing).
 *   **[deploy/vps_fix.py](file:///root/pixel10-bot-automation/deploy/vps_fix.py)**: Automated script to resolve common stack failures (restarts services, rebuilds network bridges, cleans logs).
 *   **[deploy/find_stuck_jobs.py](file:///root/pixel10-bot-automation/deploy/find_stuck_jobs.py)**: Scans the database to identify and report stuck/unresponsive jobs.
 *   **[deploy/vps_refund_stuck.py](file:///root/pixel10-bot-automation/deploy/vps_refund_stuck.py)**: Automatically cancels stuck jobs and refunds spent credits to users.
@@ -246,13 +246,21 @@ adb connect 127.0.0.1:5555
 adb -s 127.0.0.1:5555 shell getprop sys.boot_completed
 ```
 
-### 2. CPU Set Governor Issues (`fix_cpuset.sh`)
+### 2. uvloop Subprocess & ProcessLookupError Stability Fix
+When running FastAPI with `uvloop` as the event loop, standard `asyncio` subprocess operations like `proc.kill()` can raise an uncaught `ProcessLookupError` or `OSError` if the process has already terminated.
+We resolved this by wrapping the subprocess termination handlers in robust `try/except (ProcessLookupError, OSError)` blocks in both:
+- `_adb_shell()` in [runner.py](file:///root/pixel10-bot-automation/bot/android_worker/runner.py)
+- `adb_connect()` and `run_adb()` in [device.py](file:///root/pixel10-bot-automation/bot/android_worker/device.py)
+
+This guarantees that the original `TimeoutError` is correctly propagated to the caller, preventing jobs from silently failing or logging empty state strings.
+
+### 3. CPU Set Governor Issues (`fix_cpuset.sh`)
 On some virtual private servers, Docker compose starts ReDroid with restricted cgroup resources, leading to extremely slow execution or freezing. Run the alignment script:
 ```bash
 sudo bash infra/fix_cpuset.sh
 ```
 
-### 3. Fixing VPN Network Routing & Policy Leaks
+### 4. Fixing VPN Network Routing & Policy Leaks
 If Android traffic leaks or fails to resolve DNS under VPN routing, force routing tables rules on Gluetun:
 ```bash
 bash infra/fix_vpn_routing.sh
