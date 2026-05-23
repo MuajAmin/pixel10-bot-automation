@@ -1,6 +1,6 @@
 # 🤖 BDGemini Pixel Worker
 
-An automated Telegram-bot driven pipeline designed to run on a Linux VPS using a headless ReDroid container (Android 11) to spoof Google Pixel 10 Pro hardware identities and claim the Google One AI Premium (Gemini Advanced) offer on Google accounts.
+An automated, Telegram-bot-driven automation pipeline designed to run on a Linux VPS using a headless ReDroid container. It mimics Google Pixel 10 Pro hardware identities to claim the Google One AI Premium (Gemini Advanced) promotional trial on Google accounts.
 
 ---
 
@@ -21,7 +21,7 @@ graph TD
     subgraph VPSHost [Linux VPS Host]
         subgraph DockerStack [Docker Compose Stack]
             Gluetun[Gluetun VPN Gateway] <-->|WireGuard VPN Tunnel| VPNProvider([ProtonVPN Server])
-            ReDroid[ReDroid Container Android 11] ---|Shares Network Namespace| Gluetun
+            ReDroid[ReDroid Container Android 11/13] ---|Shares Network Namespace| Gluetun
             WorkerAPI[Worker API Server api_server.py]
         end
         
@@ -40,27 +40,23 @@ graph TD
 
 ---
 
-## 📖 How It Works: VPS Gemini Offer Claim Flow
+## 📖 Deep-Dive: Core Technical Solutions
 
-Google restricts the Gemini Advanced/AI Premium promo (typically a 1-year trial) to specific flagship devices like the Pixel 10 Pro. However, spoofing a flagship identity globally on a lower Android version runtime (like ReDroid Android 11) causes critical SDK version mismatches. This breaks Google Play Services (GMS), attestation, and Google Play Store, making account authentication impossible.
+Claiming device-exclusive offers requires bypassing Google Play's strict attestation checks, SDK validation, and preventing account cross-contamination. This codebase solves these challenges through three core mechanisms:
 
-To bypass these restrictions, this project implements a **Dual-Identity Property Engine** coordinated by a Python worker and ADB commands:
+### 1. The Dual-Identity Property Engine ([build_props.sh](file:///root/pixel10-bot-automation/core/build_props.sh))
+Google restricts promotional offers (e.g. Pixel 10 Pro Gemini Premium trial) to specific flagships. However, permanently spoofing a newer flagship identity (e.g., Pixel 10 Pro / SDK 36) globally on a lower host Android runtime (such as ReDroid Android 11 / SDK 30) causes critical SDK version mismatches. This breaks Google Play Services (GMS), prevents account logins, and triggers system crashes.
 
-### The Dual-Identity Property Engine ([build_props.sh](file:///root/pixel10-bot-automation/core/build_props.sh))
-* **Base Identity (Pixel 5 / redfin / SDK 30 / Android 11)**:
-  Used globally to ensure ReDroid's Android 11 runtime remains fully stable, passes basic Play Integrity checks, and logs into Google Accounts successfully.
-* **Swap Layer (Pixel 10 Pro / franklin / SDK 36 / Android 16)**:
-  Applied temporarily during critical interaction windows (Google Login initiation and Google One launch).
-* **In-Memory Property Caching**:
-  Android's `Build` class caches property values in-memory at process initialization. When we swap properties to Pixel 10 Pro, launch the target application (Google One), and immediately restore the properties back to Pixel 5, the Google One process continues to see the Pixel 10 Pro signature in-memory. Meanwhile, GMS and system processes revert safely to Pixel 5 without crashing or failing attestation.
-
-### 🕒 Dual-Identity Prop-Swap Timeline
+To circumvent this, we implement a **Dual-Identity Property Engine**:
+*   **Base Identity (Pixel 5 / SDK 30)**: Kept active during boot and idle states to guarantee system stability and normal GMS background synchronization.
+*   **Swap Layer (Pixel 10 Pro XL / SDK 36)**: Swapped in temporarily during Google account login initiation and the Google One launch window.
+*   **In-Memory Caching Exploit**: Android's `Build` class caches property values in memory at process initialization. When we swap properties to the target identity, launch the target application (Google One), and immediately restore properties to the base identity, the target application continues to see the Pixel 10 Pro XL signature in-memory. Meanwhile, GMS and system processes safely revert to the stable Pixel 5 profile, avoiding attestation failure crashes.
 
 ```
-               ┌── Base Identity ──┐ (P5 / redfin / SDK 30 / Android 11)
+               ┌── Base Identity ──┐ (Pixel 5 / redfin / SDK 30)
                │                   │
                │   ┌───────────────┴───────────────┐
-               │   │ Swap Layer (P10 Pro)          │
+               │   │ Swap Layer (Pixel 10 Pro XL)  │
                │   │                               │
                ▼   ▼                               ▼
 PROP LEVEL:   Base ───── Swap ───── Base ───── Swap ───── Base
@@ -68,6 +64,19 @@ PHASE:        Boot ───► Login ───► Sync ───► Launch ─�
               (P5)    (P10 Pro)     (P5)    (P10 Pro)     (P5)
 GMS State:   Stable   Transient    Stable   Transient    Stable
 ```
+
+### 2. Multi-User Isolation Sandbox ([runner.py](file:///root/pixel10-bot-automation/bot/android_worker/runner.py))
+To prevent data contamination, login state leaks, and caching of credentials between jobs, the worker avoids factory-resetting the entire emulator container. Instead, it leverages Android's native multi-user subsystem:
+*   For each job, the runner creates a isolated Android user profile using `pm create-user`.
+*   The worker switches into that isolated profile (`am switch-user`).
+*   All automated UI interactions, Google authentication, and cache directories run strictly enclosed inside the ephemeral user space.
+*   Upon job completion or failure, the profile is permanently deleted via `pm remove-user`, removing all trace profiles, database entries, and GMS caches.
+
+### 3. uvloop Subprocess & ProcessLookupError Stability Fix
+When running FastAPI with `uvloop` as the event loop, standard `asyncio` subprocess operations like `proc.kill()` during timeouts can raise an uncaught `ProcessLookupError` or `OSError` if the process has already terminated/been reaped.
+We resolved this by wrapping the subprocess termination handlers in robust `try/except (ProcessLookupError, OSError)` blocks in both:
+- `_adb_shell()` in [runner.py](file:///root/pixel10-bot-automation/bot/android_worker/runner.py)
+- `adb_connect()` and `run_adb()` in [device.py](file:///root/pixel10-bot-automation/bot/android_worker/device.py)
 
 ---
 
@@ -246,21 +255,13 @@ adb connect 127.0.0.1:5555
 adb -s 127.0.0.1:5555 shell getprop sys.boot_completed
 ```
 
-### 2. uvloop Subprocess & ProcessLookupError Stability Fix
-When running FastAPI with `uvloop` as the event loop, standard `asyncio` subprocess operations like `proc.kill()` can raise an uncaught `ProcessLookupError` or `OSError` if the process has already terminated.
-We resolved this by wrapping the subprocess termination handlers in robust `try/except (ProcessLookupError, OSError)` blocks in both:
-- `_adb_shell()` in [runner.py](file:///root/pixel10-bot-automation/bot/android_worker/runner.py)
-- `adb_connect()` and `run_adb()` in [device.py](file:///root/pixel10-bot-automation/bot/android_worker/device.py)
-
-This guarantees that the original `TimeoutError` is correctly propagated to the caller, preventing jobs from silently failing or logging empty state strings.
-
-### 3. CPU Set Governor Issues (`fix_cpuset.sh`)
+### 2. CPU Set Governor Issues (`fix_cpuset.sh`)
 On some virtual private servers, Docker compose starts ReDroid with restricted cgroup resources, leading to extremely slow execution or freezing. Run the alignment script:
 ```bash
 sudo bash infra/fix_cpuset.sh
 ```
 
-### 4. Fixing VPN Network Routing & Policy Leaks
+### 3. Fixing VPN Network Routing & Policy Leaks
 If Android traffic leaks or fails to resolve DNS under VPN routing, force routing tables rules on Gluetun:
 ```bash
 bash infra/fix_vpn_routing.sh
