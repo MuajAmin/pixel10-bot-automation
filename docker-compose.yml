@@ -32,8 +32,10 @@ services:
       - FIREWALL=on
       - DNS_KEEP_NAMESERVER=off
       - HEALTH_RESTART_VPN=off
+      - HEALTH_TARGET_ADDRESS=10.2.0.1:53
       - HEALTH_ICMP_TARGET_IPS=10.2.0.1
       - PUBLICIP_ENABLED=off
+      - VERSION_INFORMATION=off
     restart: unless-stopped
 
   redroid:

@@ -51,8 +51,10 @@ services:
       - FIREWALL=on                  # Kill switch enabled to prevent network leaks
       - DNS_KEEP_NAMESERVER=off      # Do not inherit host resolvers
       - HEALTH_RESTART_VPN=off
+      - HEALTH_TARGET_ADDRESS=10.2.0.1:53
       - HEALTH_ICMP_TARGET_IPS=10.2.0.1
       - PUBLICIP_ENABLED=off
+      - VERSION_INFORMATION=off
     restart: always
 
   # ── ReDroid — Headless Android 13 (Pixel 10 Pro XL / franklin) ──────────
