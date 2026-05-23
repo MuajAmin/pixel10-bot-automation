@@ -11,7 +11,7 @@
 #   │          │ (Shares Network Namespace)                  │
 #   │  ┌───────▼───────┐                                     │
 #   │  │    ReDroid    │  All traffic secure & encrypted,    │
-#   │  │   Android 11  │  Proton secure DNS (10.2.0.1) active│
+#   │  │   Android 13  │  Proton secure DNS (10.2.0.1) active│
 #   │  └───────────────┘                                     │
 #   │                                                        │
 #   │  ┌───────────────┐  host networking                    │
@@ -49,12 +49,17 @@ services:
       - HEALTH_RESTART_VPN=off
     restart: always
 
-  # ── ReDroid — Headless Android 11 (Pixel 5 / redfin) ──────────
+  # ── ReDroid — Headless Android 13 (Pixel 10 Pro XL / franklin) ──────────
   redroid:
-    image: ${REDROID_IMAGE:?Set REDROID_IMAGE in infra/.env to the custom GApps/Magisk/NDK image built with redroid.py -a 11.0.0 -gmnw}
+    image: redroid/redroid:13.0.0-latest
     container_name: pixel10-android
     privileged: true
     network_mode: "container:gluetun"  # Shares network namespace with Gluetun
+    deploy:
+      resources:
+        limits:
+          cpus: '6'
+          memory: 4G
     volumes:
       - redroid-data:/data
       - /dev/binderfs:/dev/binderfs
@@ -67,6 +72,7 @@ services:
 
       # ── Rendering ──
       - androidboot.redroid_gpu_mode=guest
+      - ro.hardware.egl=adreno
 
       # ── Locale ──
       - persist.sys.timezone=America/New_York
@@ -74,42 +80,42 @@ services:
       - persist.sys.country=US
       - ro.product.locale=en-US
 
-      # ── Pixel 10 Pro XL (mustang) — Device Identity ──
+      # ── Pixel 10 Pro XL (franklin) — Device Identity ──
       - ro.product.brand=google
       - ro.product.manufacturer=Google
       - ro.product.model=Pixel 10 Pro XL
-      - ro.product.name=mustang
-      - ro.product.device=mustang
-      - ro.product.board=mustang
+      - ro.product.name=franklin
+      - ro.product.device=franklin
+      - ro.product.board=franklin
 
       # System partition
       - ro.product.system.brand=google
       - ro.product.system.manufacturer=Google
       - ro.product.system.model=Pixel 10 Pro XL
-      - ro.product.system.name=mustang
-      - ro.product.system.device=mustang
+      - ro.product.system.name=franklin
+      - ro.product.system.device=franklin
 
       # Vendor partition
       - ro.product.vendor.brand=google
       - ro.product.vendor.manufacturer=Google
       - ro.product.vendor.model=Pixel 10 Pro XL
-      - ro.product.vendor.name=mustang
-      - ro.product.vendor.device=mustang
+      - ro.product.vendor.name=franklin
+      - ro.product.vendor.device=franklin
 
       # Product partition
       - ro.product.product.brand=google
       - ro.product.product.manufacturer=Google
       - ro.product.product.model=Pixel 10 Pro XL
-      - ro.product.product.name=mustang
-      - ro.product.product.device=mustang
+      - ro.product.product.name=franklin
+      - ro.product.product.device=franklin
 
-      # ── Build / Fingerprint (SDK 30 Alignment for Android 11 base) ──
+      # ── Build / Fingerprint (SDK 36 Alignment for Android 13 base) ──
       - ro.build.id=RQ3A.210805.001.A1
       - ro.build.display.id=RQ3A.210805.001.A1
       - ro.build.flavor=redfin-user
       - ro.build.type=user
       - ro.build.tags=release-keys
-      - ro.build.version.sdk=30
+      - ro.build.version.sdk=36
       - ro.build.version.codename=REL
 
       # ── Google Service Identity ──
