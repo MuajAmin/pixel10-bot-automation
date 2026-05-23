@@ -63,7 +63,7 @@ services:
       - androidboot.redroid_dpi=420
       - androidboot.redroid_fps=60
       - androidboot.redroid_gpu_mode=guest
-      - ro.hardware.egl=mesa
+      - ro.hardware.egl=angle
       - persist.sys.timezone=America/New_York
       - persist.sys.language=en
       - persist.sys.country=US
