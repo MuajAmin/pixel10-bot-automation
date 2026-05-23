@@ -79,7 +79,10 @@ async def adb_connect(addr: str) -> bool:
         return process.returncode == 0
     except asyncio.TimeoutError:
         if process is not None:
-            process.kill()
+            try:
+                process.kill()
+            except (ProcessLookupError, OSError):
+                pass
             await process.wait()
         logger.debug("adb connect %s timed out after %ss", addr, ADB_COMMAND_TIMEOUT_SEC)
         return False
@@ -108,7 +111,10 @@ async def run_adb(*args: str, timeout: int | None = None) -> tuple[int, str]:
             timeout=timeout or ADB_COMMAND_TIMEOUT_SEC,
         )
     except asyncio.TimeoutError:
-        process.kill()
+        try:
+            process.kill()
+        except (ProcessLookupError, OSError):
+            pass
         await process.wait()
         return 124, ""
 

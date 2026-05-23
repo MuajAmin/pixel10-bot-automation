@@ -81,9 +81,27 @@ async def _adb_shell(
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError as exc:
-        proc.kill()
-        await proc.wait()
-        raise TimeoutError(f"adb shell timed out after {timeout:.1f}s for {command!r}") from exc
+        # Kill the process. Under uvloop the process may already have exited
+        # before we get here, so both ProcessLookupError and the more general
+        # OSError must be tolerated.
+        try:
+            proc.kill()
+        except (ProcessLookupError, OSError):
+            pass
+        # Guard proc.wait() with its own timeout.
+        # Critical: asyncio.wait_for(proc.communicate()) internally parks
+        # pipe-readers in uvloop's event loop.  When wait_for cancels them
+        # the transport is left in an inconsistent state where a bare
+        # `await proc.wait()` blocks forever, which prevents the
+        # TimeoutError from ever being raised and leaves result["message"]
+        # as "" in the caller, producing a false "Done" report.
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            pass  # give up; the OS will reap the zombie
+        raise TimeoutError(
+            f"adb shell timed out after {timeout:.1f}s for {command!r}"
+        ) from exc
     output = "\n".join(
         part.decode("utf-8", errors="replace").strip()
         for part in (stdout, stderr)
@@ -421,6 +439,21 @@ async def run_android_job(
         except Exception:
             pass
 
+    except asyncio.CancelledError:
+        # CancelledError is a BaseException (not Exception) so the broad
+        # `except Exception` below will NOT catch it.  Without this handler
+        # result["message"] stays "" and the progress_callback fires with an
+        # empty string, which downstream code silently renders as "Done".
+        result["status"] = "TIMEOUT"
+        result["message"] = "Job cancelled — ADB subprocess did not respond in time"
+        logger.warning("[%s] Job cancelled (CancelledError)", job_id)
+        if process and process.returncode is None:
+            try:
+                process.kill()
+            except (ProcessLookupError, OSError):
+                pass
+        raise  # CancelledError must always be re-raised
+
     except Exception as exc:
         logger.exception("[%s] Job error: %s", job_id, exc)
         result["status"] = "ERROR"
@@ -435,7 +468,11 @@ async def run_android_job(
         )
 
         if progress_callback:
-            await progress_callback(100, result.get("message", "Done"))
+            # Use `or` so that an empty-string message also falls back to
+            # "Done".  dict.get(key, default) only fires when the key is
+            # absent; since "message" is always initialised to "", the
+            # original `result.get("message", "Done")` always returned "".
+            await progress_callback(100, result.get("message") or "Done")
 
         logger.info(
             "[%s] ═══ Job finished: %s (%.1fs) ═══",
