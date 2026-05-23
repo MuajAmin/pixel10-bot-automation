@@ -86,7 +86,7 @@ services:
 
       # ── Rendering ──
       - androidboot.redroid_gpu_mode=guest
-      - ro.hardware.egl=adreno
+      - ro.hardware.egl=swiftshader
 
       # ── Locale ──
       - persist.sys.timezone=America/New_York
@@ -97,7 +97,7 @@ services:
       # ── Pixel 10 Pro XL (franklin) — Device Identity ──
       - ro.product.brand=google
       - ro.product.manufacturer=Google
-      - ro.product.model=Pixel 10 Pro XL
+      - ro.product.model=Pixel_10_Pro_XL
       - ro.product.name=franklin
       - ro.product.device=franklin
       - ro.product.board=franklin
@@ -105,21 +105,21 @@ services:
       # System partition
       - ro.product.system.brand=google
       - ro.product.system.manufacturer=Google
-      - ro.product.system.model=Pixel 10 Pro XL
+      - ro.product.system.model=Pixel_10_Pro_XL
       - ro.product.system.name=franklin
       - ro.product.system.device=franklin
 
       # Vendor partition
       - ro.product.vendor.brand=google
       - ro.product.vendor.manufacturer=Google
-      - ro.product.vendor.model=Pixel 10 Pro XL
+      - ro.product.vendor.model=Pixel_10_Pro_XL
       - ro.product.vendor.name=franklin
       - ro.product.vendor.device=franklin
 
       # Product partition
       - ro.product.product.brand=google
       - ro.product.product.manufacturer=Google
-      - ro.product.product.model=Pixel 10 Pro XL
+      - ro.product.product.model=Pixel_10_Pro_XL
       - ro.product.product.name=franklin
       - ro.product.product.device=franklin
 
