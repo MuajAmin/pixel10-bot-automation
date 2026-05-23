@@ -168,7 +168,8 @@ done
 for metadata_ip in 169.254.169.254 169.254.169.253 100.100.100.200; do
     docker exec "$CONTAINER" ip route replace blackhole "$metadata_ip/32" table main 2>/dev/null || true
     docker exec "$CONTAINER" ip route replace blackhole "$metadata_ip/32" table "$WG_TABLE" 2>/dev/null || true
-    ensure_insert_rule OUTPUT -d "$metadata_ip" -j REJECT
+    delete_rule -D OUTPUT -d "$metadata_ip" -j REJECT
+    ensure_insert_rule OUTPUT -d "$metadata_ip" -j DROP
 done
 
 echo "✅ DNS confined to $DNS_GATEWAY and metadata endpoints blocked"
