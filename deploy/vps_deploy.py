@@ -259,8 +259,14 @@ def main():
     pr("✅", f"Uploaded {count} files")
 
     # Ensure Gluetun VPN configuration is set up
-    pr("🌐", "Copying proton.conf to Gluetun WireGuard main.conf...")
-    ssh_exec(ssh, f"mkdir -p {REMOTE_DIR}/infra/wireguard && cp {REMOTE_DIR}/config/proton.conf {REMOTE_DIR}/infra/wireguard/main.conf", check=True)
+    pr("🌐", "Copying proton.conf to Gluetun WireGuard runtime configs...")
+    ssh_exec(
+        ssh,
+        f"mkdir -p {REMOTE_DIR}/infra/wireguard "
+        f"&& cp {REMOTE_DIR}/config/proton.conf {REMOTE_DIR}/infra/wireguard/main.conf "
+        f"&& cp {REMOTE_DIR}/config/proton.conf {REMOTE_DIR}/infra/wireguard/proton.conf",
+        check=True,
+    )
 
     # Fix CRLF + permissions for all shell scripts
     pr("🔧", "Fixing CRLF line endings...")
