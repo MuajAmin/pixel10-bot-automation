@@ -597,3 +597,79 @@ async def refund_job(telegram_id: str, job_id: str) -> bool:
         )
         return True
     return False
+
+
+async def refund_task_unit_for_constraint(
+    telegram_id: str,
+    job_id: str,
+    reason: str,
+) -> bool:
+    """Atomically credit exactly 1 task unit for app-level constraints.
+
+    This is intentionally separate from ``refund_job`` because constraint
+    failures are detected by the app UI, not by generic worker failure logic.
+    The MongoDB path uses a single guarded ``$inc`` update so duplicate
+    detections cannot credit the same job more than once.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+
+    if not mongo_available():
+        async with _ASYNC_JSON_LOCK:
+            accounts = _load_json_accounts()
+            doc = accounts.get(telegram_id)
+            if not doc:
+                return False
+            normalize_account(doc)
+            job = next((j for j in doc.get("jobs", []) if j.get("id") == job_id), None)
+            if not job or job.get("constraint_refunded"):
+                return False
+            doc["deposit_credit"] = int(doc.get("deposit_credit", 0)) + 1
+            job["constraint_refunded"] = True
+            job["constraint_refund_reason"] = reason
+            job["constraint_refunded_at"] = now
+            ledger = list(doc.get("credit_ledger", []))
+            ledger.append({
+                "type": "constraint_refund",
+                "amount": 1,
+                "job_id": job_id,
+                "reason": reason,
+                "created_at": now,
+            })
+            doc["credit_ledger"] = ledger[-CREDIT_LEDGER_LIMIT:]
+            accounts[telegram_id] = doc
+            _save_json_accounts(accounts)
+        return True
+
+    result = await users_col().update_one(
+        {
+            "_id": telegram_id,
+            "jobs": {
+                "$elemMatch": {
+                    "id": job_id,
+                    "constraint_refunded": {"$ne": True},
+                }
+            },
+        },
+        {
+            "$inc": {"deposit_credit": 1},
+            "$set": {
+                "jobs.$[job].constraint_refunded": True,
+                "jobs.$[job].constraint_refund_reason": reason,
+                "jobs.$[job].constraint_refunded_at": now,
+            },
+            "$push": {
+                "credit_ledger": {
+                    "$each": [{
+                        "type": "constraint_refund",
+                        "amount": 1,
+                        "job_id": job_id,
+                        "reason": reason,
+                        "created_at": now,
+                    }],
+                    "$slice": -CREDIT_LEDGER_LIMIT,
+                }
+            },
+        },
+        array_filters=[{"job.id": job_id, "job.constraint_refunded": {"$ne": True}}],
+    )
+    return result.modified_count > 0

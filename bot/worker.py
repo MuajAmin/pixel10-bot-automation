@@ -206,7 +206,7 @@ async def _run_android_job(
     Telegram progress messages back to the user.  It also persists the
     final result to account/job storage and auto-refunds on failure.
     """
-    from bot.accounts import refund_job, update_job_status
+    from bot.accounts import refund_job, refund_task_unit_for_constraint, update_job_status
     from bot.android_worker.client import run_android_job_remote
 
     # ── Translate Telegram-layer method to worker protocol ────────
@@ -305,6 +305,18 @@ async def _run_android_job(
                 f"📈 Progress: 100%\n"
                 f"📝 Progress note: {message}"
             )
+        elif status == "APP_CONSTRAINT":
+            final_status = "FAILED"
+            final_text = (
+                f"⚠️ Job details\n\n"
+                f"🆔 Job ID: {job_id}\n"
+                f"📧 Email: {gmail}\n"
+                f"⚠️ Status: APP_CONSTRAINT\n"
+                f"💸 Charged: {charged} credit\n"
+                f"🏷️ Credit source: {credit_source}\n"
+                f"📈 Progress: 100%\n"
+                f"📝 Progress note: {message or 'Application-level eligibility constraint'}"
+            )
         else:
             final_status = "FAILED"
             final_text = (
@@ -327,8 +339,18 @@ async def _run_android_job(
             extra["redeem_link"] = offer_url
         await update_job_status(telegram_id, job_id, final_status, extra)
 
+        if status == "APP_CONSTRAINT":
+            credited = await refund_task_unit_for_constraint(
+                telegram_id,
+                job_id,
+                message or "application_constraint",
+            )
+            if credited:
+                final_text += "\n\n💰 1 task unit has been credited back."
+                logger.info("Job %s constraint-refunded 1 task unit for user %s", job_id, telegram_id)
+
         # Auto-refund on failure
-        if final_status == "FAILED":
+        if final_status == "FAILED" and status != "APP_CONSTRAINT":
             refunded = await refund_job(telegram_id, job_id)
             if refunded:
                 final_text += "\n\n💰 Credit has been auto-refunded."

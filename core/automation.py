@@ -30,13 +30,16 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import logging
 import os
 import random
 import re
+import shlex
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -65,6 +68,68 @@ logging.basicConfig(
 )
 log = logging.getLogger("automation")
 
+
+_BASE32_SECRET_RE = re.compile(r"^[A-Z2-7]{32}$")
+
+
+def parse_account_token(token: str) -> tuple[str, str, str]:
+    """Parse account credentials in email---password---2fa_secret format.
+
+    Returns ``(email, password, totp_secret)``. If the delimiter is not
+    present, treats ``token`` as an email for backward compatibility.
+    """
+    parts = token.strip().split("---")
+    if len(parts) == 1:
+        return parts[0].strip(), "", ""
+    if len(parts) != 3:
+        raise ValueError("account token must use email---password---2fa_secret")
+
+    email = parts[0].strip().lower()
+    password = parts[1]
+    secret = normalize_totp_secret(parts[2])
+    return email, password, secret
+
+
+def normalize_totp_secret(secret: str) -> str:
+    """Normalize and validate a 32-character base32 TOTP secret."""
+    normalized = re.sub(r"\s+", "", secret or "").replace("=", "").upper()
+    if normalized and not _BASE32_SECRET_RE.fullmatch(normalized):
+        raise ValueError("TOTP secret must be a 32-character base32 token")
+    return normalized
+
+
+def current_totp_code(secret: str) -> str:
+    """Compute the current 6-digit TOTP code from a base32 secret."""
+    normalized = normalize_totp_secret(secret)
+    if not normalized:
+        return ""
+    import pyotp
+
+    return pyotp.TOTP(normalized).now()
+
+
+def escape_adb_input_text(text: str) -> str:
+    """Escape text for ``adb shell input text`` without %s substitution.
+
+    Android's ``input text`` command accepts spaces as escaped spaces. The
+    command is still parsed by a shell first, so every character outside a
+    conservative terminal-safe set is backslash-escaped.
+    """
+    safe_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._@%-+=:,/")
+    escaped: list[str] = []
+    for char in text:
+        if char in safe_chars:
+            escaped.append(char)
+        elif char == " ":
+            escaped.append(r"\ ")
+        elif char == "\n":
+            escaped.append(r"\n")
+        elif char == "\t":
+            escaped.append(r"\t")
+        else:
+            escaped.append("\\" + char)
+    return "".join(escaped)
+
 # ── Config Constants ───────────────────────────────────────────
 ADB_CONNECT_TIMEOUT_SEC = int(os.getenv("ADB_CONNECT_TIMEOUT_SEC", "180"))
 ADB_RECONNECT_INTERVAL_SEC = int(os.getenv("ADB_RECONNECT_INTERVAL_SEC", "5"))
@@ -80,6 +145,79 @@ PKG_GMS = "com.google.android.gms"
 PKG_PLAY_STORE = "com.android.vending"
 PKG_GOOGLE_ONE = "com.google.android.apps.subscriptions.red"
 PKG_GSF = "com.google.android.gsf"
+RESET_PACKAGES = (PKG_GSF, PKG_GMS, PKG_PLAY_STORE, PKG_GOOGLE_ONE)
+RUNTIME_COMPAT_ERRORS = ("NoSuchMethodError", "ClassNotFoundException")
+
+
+def _user_arg(android_user: int | None) -> str:
+    return f"--user {android_user}" if android_user is not None else ""
+
+
+def _is_runtime_compat_error(text: str) -> bool:
+    return any(marker in text for marker in RUNTIME_COMPAT_ERRORS)
+
+
+def safe_device_shell(
+    device: u2.Device,
+    command: str,
+    *,
+    default: str = "",
+    tolerate_compat: bool = True,
+) -> str:
+    """Run a device shell command with runtime API compatibility guards."""
+    try:
+        result = device.shell(command)
+        output = getattr(result, "output", result)
+        if output is None:
+            return default
+        output_text = str(output)
+        if tolerate_compat and _is_runtime_compat_error(output_text):
+            log.warning("Runtime compatibility exception tolerated for %r: %s", command, output_text.strip())
+        return output_text
+    except Exception as exc:
+        exc_text = str(exc)
+        if tolerate_compat and _is_runtime_compat_error(exc_text):
+            log.warning("Runtime compatibility exception tolerated for %r: %s", command, exc_text)
+            return default
+        raise
+
+
+def am_force_stop(device: u2.Device, package: str, android_user: int | None = None) -> str:
+    return safe_device_shell(device, f"am force-stop {_user_arg(android_user)} {package}".strip())
+
+
+def am_start(device: u2.Device, intent_args: str, android_user: int | None = None) -> str:
+    return safe_device_shell(device, f"am start {_user_arg(android_user)} {intent_args}".strip())
+
+
+def pm_clear(device: u2.Device, package: str, android_user: int | None = None) -> str:
+    return safe_device_shell(device, f"pm clear {_user_arg(android_user)} {package}".strip())
+
+
+def pm_list_package(device: u2.Device, package: str, android_user: int | None = None) -> str:
+    return safe_device_shell(device, f"pm list packages {_user_arg(android_user)} {package}".strip())
+
+
+def deep_target_package_reset(device: u2.Device, android_user: int | None = None) -> None:
+    """Force-stop and clear the target app namespaces for the active profile."""
+    log.info("Running deep package reset for Android user %s", android_user if android_user is not None else "current")
+    for package in RESET_PACKAGES:
+        try:
+            am_force_stop(device, package, android_user)
+        except Exception as exc:
+            log.warning("force-stop failed for %s: %s", package, exc)
+        try:
+            pm_clear(device, package, android_user)
+        except Exception as exc:
+            log.warning("pm clear failed for %s: %s", package, exc)
+
+
+def switch_android_user(device: u2.Device, android_user: int | None = None) -> None:
+    """Switch foreground execution to the isolated Android user profile."""
+    if android_user is None:
+        return
+    safe_device_shell(device, f"am start-user {android_user}", tolerate_compat=True)
+    safe_device_shell(device, f"am switch-user {android_user}", tolerate_compat=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -291,11 +429,13 @@ def get_robust_device(adb_target: str, timeout_sec: int = 120) -> u2.Device:
 # ═══════════════════════════════════════════════════════════════════
 
 def audit_network_and_dns(device: u2.Device) -> bool:
-    """Verify ReDroid's routing and DNS to prevent datacenter IP leak bans, with a retry loop to handle startup stabilization."""
+    """Verify ReDroid's routing and DNS without probing from the host network."""
     log.info("━━━ NETWORK & DNS LEAK AUDIT ━━━")
     
     max_attempts = 12
     retry_interval = 5
+    dns_gateway = "10.2.0.1"
+    route_probe_ip = "203.0.113.10"
     
     for attempt in range(1, max_attempts + 1):
         log.info("Running network & DNS audit (Attempt %d/%d)...", attempt, max_attempts)
@@ -306,76 +446,43 @@ def audit_network_and_dns(device: u2.Device) -> bool:
         log.info("  Primary DNS server property: %s", dns1)
         log.info("  Secondary DNS server property: %s", dns2)
 
-        # 2. Check if Proton secure DNS (10.2.0.1) is active
-        ping_res = device.shell("ping -c 1 -W 3 10.2.0.1").output
-        if "1 received" in ping_res or "1 packets transmitted, 1 received" in ping_res:
-            log.info("  ✅ Proton VPN Secure DNS (10.2.0.1) is pingable inside ReDroid namespace")
-        else:
-            log.warning("  ⚠️ Proton DNS (10.2.0.1) is not directly pingable (check Gluetun routing)")
-
-        # 3. Retrieve container's public IP inside Android container
-        android_public_ip = ""
-        providers = ["http://api.ipify.org", "http://ifconfig.me", "http://ipinfo.io/ip"]
-        commands = [
-            "/system/etc/init/magisk/busybox wget -q -O - {provider}",
-            "wget -q -O - {provider}",
-            "curl -s {provider}",
-            "/system/bin/curl -s {provider}"
-        ]
-        for cmd_template in commands:
-            for provider in providers:
-                cmd = cmd_template.format(provider=provider)
-                try:
-                    res = device.shell(cmd).output.strip()
-                    # Clean non-ip junk
-                    match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', res)
-                    if match:
-                        android_public_ip = match.group(1)
-                        log.info("  Successfully retrieved IP using: %s", cmd)
-                        break
-                except Exception as e:
-                    log.debug("IP check failed via cmd '%s': %s", cmd, e)
-            if android_public_ip:
-                break
-                
-        if not android_public_ip:
-            log.warning("  ⚠️ Android container has NO internet connectivity or can't fetch external IP yet.")
+        observed_dns = [value for value in (dns1, dns2) if value]
+        if not observed_dns or any(value != dns_gateway for value in observed_dns):
+            log.warning("  ⚠️ DNS properties are not pinned exclusively to %s", dns_gateway)
             if attempt < max_attempts:
                 log.info("  Waiting %ds before retry...", retry_interval)
                 time.sleep(retry_interval)
                 continue
-            else:
-                log.error("  ❌ Android container has NO internet connectivity or can't fetch external IP after %d attempts!", max_attempts)
-                return False
-            
-        log.info("  Android Container Public IP: %s", android_public_ip)
-        
-        # 4. Prevent leak by comparing with worker host's public IP
-        try:
-            import urllib.request
-            req = urllib.request.Request(
-                "http://api.ipify.org", 
-                headers={'User-Agent': 'Mozilla/5.0'}
-            )
-            with urllib.request.urlopen(req, timeout=8) as response:
-                host_ip = response.read().decode('utf-8').strip()
-                
-            log.info("  Worker Host Public IP:        %s", host_ip)
-            
-            if android_public_ip == host_ip:
-                log.warning("  ⚠️ WARNING: Android container public IP matches the VPS host IP (Leaking host IP)!")
-                if attempt < max_attempts:
-                    log.info("  VPN may still be establishing connection. Waiting %ds before retry...", retry_interval)
-                    time.sleep(retry_interval)
-                    continue
-                else:
-                    log.critical("  ❌ CRITICAL SECURITY BREACH: Android container public IP matches the VPS host IP after %d attempts!", max_attempts)
-                    log.critical("  ReDroid is LEAKING datacenter IP! Halting automation instantly to prevent bans.")
-                    return False
-            else:
-                log.info("  ✅ Geolocation Isolation Confirmed: ReDroid IP is distinct from Datacenter Host IP")
-        except Exception as exc:
-            log.warning("  ⚠️ Could not acquire host public IP for leakage comparison: %s. Continuing with caution.", exc)
+            log.critical("  ❌ DNS boundary violation: observed DNS values are %s", observed_dns or ["<empty>"])
+            return False
+
+        # 2. Check that the secure DNS gateway and default route resolve via VPN interfaces.
+        dns_route = device.shell(f"ip route get {dns_gateway}").output.strip()
+        default_route = device.shell(f"ip route get {route_probe_ip}").output.strip()
+        log.info("  Route to DNS gateway: %s", dns_route)
+        log.info("  Default route probe:  %s", default_route)
+
+        route_blob = f"{dns_route}\n{default_route}"
+        route_uses_vpn = re.search(r"\bdev\s+(tun|wg)[A-Za-z0-9_.:-]*\b", route_blob)
+        route_uses_eth = re.search(r"\bdev\s+eth[0-9_.:-]*\b", default_route)
+        route_blocked = "unreachable" in route_blob.lower() or "prohibit" in route_blob.lower()
+
+        if route_blocked or route_uses_eth or not route_uses_vpn:
+            log.warning("  ⚠️ Route boundary is not pinned to the VPN namespace")
+            if attempt < max_attempts:
+                log.info("  Waiting %ds before retry...", retry_interval)
+                time.sleep(retry_interval)
+                continue
+            log.critical("  ❌ Route boundary violation: DNS/default route is not VPN-only")
+            return False
+
+        # 3. Optional liveness check for Proton secure DNS. ICMP may be disabled,
+        # so this is logged but not used as the source of truth.
+        ping_res = device.shell(f"ping -c 1 -W 3 {dns_gateway}").output
+        if "1 received" in ping_res or "1 packets transmitted, 1 received" in ping_res:
+            log.info("  ✅ Proton VPN Secure DNS (%s) is pingable inside ReDroid namespace", dns_gateway)
+        else:
+            log.info("  Proton DNS ICMP did not respond; route and DNS pins are still enforced")
             
         log.info("  ✅ Pre-flight network audit passed.")
         return True
@@ -496,9 +603,8 @@ def robust_type(device: u2.Device, selector, text: str, field_desc: str = "Input
                 device.shell("input keyevent 67")
         except Exception:
             pass
-        # Set clipboard via am broadcast
-        escaped_text = text.replace("'", "'\"'\"'")
-        device.shell(f"am broadcast -a clipper.set -e text '{escaped_text}'")
+        # Set clipboard via am broadcast with shell-safe argument quoting.
+        device.shell(f"am broadcast -a clipper.set -e text {shlex.quote(text)}")
         time.sleep(0.3)
         # Paste via Ctrl+V
         device.shell("input keyevent 279")  # KEYCODE_PASTE
@@ -527,10 +633,8 @@ def robust_type(device: u2.Device, selector, text: str, field_desc: str = "Input
                 device.shell("input keyevent 67")
         except Exception:
             pass
-        # Escape special shell characters for ADB input text
-        # ADB input text handles most chars but needs shell escaping
-        safe = text.replace("\\", "\\\\").replace("'", "'\"'\"'").replace(" ", "\\ ")
-        device.shell(f"input text '{safe}'")
+        safe = escape_adb_input_text(text)
+        device.shell(f"input text {safe}")
         time.sleep(0.5)
         log.info("[%s] ✅ ADB input text sent (unverified).", field_desc)
         hide_keyboard(device)
@@ -607,6 +711,10 @@ def run_build_props(action: str, adb_target: str = "localhost:5555") -> bool:
                 log.warning("  [props:err] %s", line)
 
         if result.returncode != 0:
+            combined = "\n".join(part for part in (result.stdout, result.stderr) if part)
+            if _is_runtime_compat_error(combined):
+                log.warning("build_props.sh %s hit a tolerated runtime compatibility exception", action)
+                return True
             log.error("build_props.sh %s failed with exit code: %d", action, result.returncode)
             return False
 
@@ -699,7 +807,7 @@ def step0_reset_device_identity(adb_target: str) -> bool:
 #  STEP 1: RE-INIT & CACHE PURGE
 # ═══════════════════════════════════════════════════════════════════
 
-def step1_init_and_purge(device: u2.Device, adb_target: str) -> bool:
+def step1_init_and_purge(device: u2.Device, adb_target: str, android_user: int | None = None) -> bool:
     """Initialize static Pixel 5 identity and clean up GMS/Google One directories."""
     log.info("━━━ STEP 1: Applying Pixel 5 Base Layer & Purging Cache ━━━")
     
@@ -709,26 +817,26 @@ def step1_init_and_purge(device: u2.Device, adb_target: str) -> bool:
 
     log.info("Wiping temporary caches...")
     for pkg in [PKG_GMS, PKG_PLAY_STORE, PKG_GOOGLE_ONE, PKG_GSF]:
-        device.shell(f"am force-stop {pkg}")
+        am_force_stop(device, pkg, android_user)
     time.sleep(1)
 
     try:
-        device.shell(f"pm clear {PKG_PLAY_STORE}")
+        pm_clear(device, PKG_PLAY_STORE, android_user)
     except Exception:
         pass
 
     try:
         # Clear GMS cache only (clearing GMS storage directly breaks registration)
-        device.shell("rm -rf /data/data/com.google.android.gms/cache/*")
+        safe_device_shell(device, "rm -rf /data/data/com.google.android.gms/cache/*")
     except Exception:
         pass
 
     try:
-        device.shell(f"pm clear {PKG_GOOGLE_ONE}")
+        pm_clear(device, PKG_GOOGLE_ONE, android_user)
     except Exception:
         pass
 
-    device.shell("logcat -c")
+    safe_device_shell(device, "logcat -c")
     log.info("━━━ STEP 1 COMPLETE: Cache purged successfully ━━━")
     return True
 
@@ -763,6 +871,8 @@ def step2_swap_and_login(
     password: str,
     adb_target: str,
     job_id: str,
+    totp_secret: str = "",
+    android_user: int | None = None,
 ) -> tuple:
     """Trigger Google Account login under the stable Pixel 5 base layer.
     
@@ -787,7 +897,7 @@ def step2_swap_and_login(
     google_found = False
     for add_acct_attempt in range(3):
         log.info("Firing native ADD_ACCOUNT settings intent (attempt %d/3)...", add_acct_attempt + 1)
-        device.shell("am start -a android.settings.ADD_ACCOUNT_SETTINGS")
+        am_start(device, "-a android.settings.ADD_ACCOUNT_SETTINGS", android_user)
         human_delay(4.0, 6.0)
 
         # Click Google Account type
@@ -863,21 +973,67 @@ def step2_swap_and_login(
     # ── 2FA SCREEN ──
     state = detect_state(device)
     if state == "2FA":
-        log.warning("2FA screen triggered. Pausing up to 180s for manual override...")
-        print("[STATUS]: 2FA_TRIGGERED")
-        take_screenshot(device, job_id, "2fa_prompt")
+        if totp_secret:
+            log.info("2FA screen triggered. Attempting TOTP verification.")
+            take_screenshot(device, job_id, "2fa_prompt")
+            try:
+                for label in ["Try another way", "Authenticator", "Get a verification code", "Enter code"]:
+                    candidate = device(text=label) if device(text=label).exists() else device(textContains=label)
+                    if candidate.exists():
+                        robust_click(device, candidate, f"2FA option ({label})", timeout=3)
+                        human_delay(1.0, 2.0)
 
-        approval_deadline = time.time() + 180
-        while time.time() < approval_deadline:
-            state = detect_state(device)
-            if state in ("SUCCESS", "TOS"):
-                log.info("2FA bypass verified.")
-                break
-            time.sleep(4)
+                code = current_totp_code(totp_secret)
+                if not code or not re.fullmatch(r"\d{6}", code):
+                    raise ValueError("TOTP code generation failed")
+                log.info("Generated TOTP code for %s: ***", gmail)
 
-        if state not in ("SUCCESS", "TOS"):
-            log.error("2FA response timed out.")
-            return "FAILED", device
+                totp_field = device(className="android.widget.EditText")
+                if not totp_field.exists(timeout=8):
+                    take_screenshot(device, job_id, "no_totp_field")
+                    return "FAILED", device
+                if not robust_type(device, totp_field, code, "TOTP Field"):
+                    take_screenshot(device, job_id, "totp_entry_failed")
+                    return "FAILED", device
+
+                next_btn = device(text="Next") if device(text="Next").exists() else device(textContains="Verify")
+                if not robust_click(device, next_btn, "TOTP Submit Button", timeout=5):
+                    device.press("enter")
+                human_delay(4.0, 7.0)
+                state = detect_state(device)
+            except Exception as exc:
+                log.exception("TOTP verification failed: %s", exc)
+                return "FAILED", device
+
+        if state in ("SUCCESS", "TOS"):
+            log.info("2FA TOTP verification accepted.")
+        elif totp_secret:
+            log.warning("TOTP submitted, waiting for post-2FA transition.")
+            approval_deadline = time.time() + 60
+            while time.time() < approval_deadline:
+                state = detect_state(device)
+                if state in ("SUCCESS", "TOS"):
+                    break
+                time.sleep(3)
+            if state not in ("SUCCESS", "TOS"):
+                log.error("TOTP response did not advance login flow.")
+                return "FAILED", device
+        else:
+            log.warning("2FA screen triggered. Pausing up to 180s for manual override...")
+            print("[STATUS]: 2FA_TRIGGERED")
+            take_screenshot(device, job_id, "2fa_prompt")
+
+            approval_deadline = time.time() + 180
+            while time.time() < approval_deadline:
+                state = detect_state(device)
+                if state in ("SUCCESS", "TOS"):
+                    log.info("2FA bypass verified.")
+                    break
+                time.sleep(4)
+
+            if state not in ("SUCCESS", "TOS"):
+                log.error("2FA response timed out.")
+                return "FAILED", device
 
     # ── AGREEMENT / TOS CHECKS ──
     for i in range(4):
@@ -903,7 +1059,7 @@ def step2_swap_and_login(
     
     # Backup validation check via system shell account dumps
     if state != "SUCCESS":
-        accounts_out = device.shell("dumpsys account").output
+        accounts_out = safe_device_shell(device, "dumpsys account")
         if gmail.lower() in accounts_out.lower():
             state = "SUCCESS"
 
@@ -943,23 +1099,24 @@ def step4_swap_and_launch_google_one(
     device: u2.Device,
     adb_target: str,
     job_id: str,
+    android_user: int | None = None,
 ) -> bool:
     """Ensure Google One resides on system, swap props to Pixel 10 Pro, and launch app."""
     log.info("━━━ STEP 4: Google One Footprint Verification & Swapping ━━━")
 
     # Install Check (with automatic self-healing Play Store installation)
-    pkg_list = device.shell(f"pm list packages {PKG_GOOGLE_ONE}").output.strip()
+    pkg_list = pm_list_package(device, PKG_GOOGLE_ONE, android_user).strip()
     if PKG_GOOGLE_ONE not in pkg_list:
         log.warning("Google One app was not detected on system. Attempting self-healing install via Play Store...")
         
         # Open Play Store directly to the Google One details page
-        device.shell(f"am start -a android.intent.action.VIEW -d 'market://details?id={PKG_GOOGLE_ONE}'")
+        am_start(device, f"-a android.intent.action.VIEW -d 'market://details?id={PKG_GOOGLE_ONE}'", android_user)
         time.sleep(5)
         
         installed_ok = False
         install_btn = None
         for attempt in range(6):
-            if PKG_GOOGLE_ONE in device.shell(f"pm list packages {PKG_GOOGLE_ONE}").output.strip():
+            if PKG_GOOGLE_ONE in pm_list_package(device, PKG_GOOGLE_ONE, android_user).strip():
                 installed_ok = True
                 break
             
@@ -978,7 +1135,7 @@ def step4_swap_and_launch_google_one(
             log.info("Waiting up to 120s for Play Store to complete the installation...")
             start_wait = time.time()
             while time.time() - start_wait < 120:
-                pkgs = device.shell(f"pm list packages {PKG_GOOGLE_ONE}").output.strip()
+                pkgs = pm_list_package(device, PKG_GOOGLE_ONE, android_user).strip()
                 if PKG_GOOGLE_ONE in pkgs:
                     log.info("✅ Google One has been installed successfully!")
                     installed_ok = True
@@ -992,7 +1149,7 @@ def step4_swap_and_launch_google_one(
             return False
 
     log.info("Force stopping Google One process...")
-    device.shell(f"am force-stop {PKG_GOOGLE_ONE}")
+    am_force_stop(device, PKG_GOOGLE_ONE, android_user)
     time.sleep(1)
 
     if not run_build_props("swap", adb_target):
@@ -1003,7 +1160,7 @@ def step4_swap_and_launch_google_one(
     log.info("Prop swap complete. Device handle remains valid (no framework restart).")
 
     log.info("Launching Google OneMainActivity to let Build.* class load the Pixel 10 Pro signature...")
-    device.shell(f"am start -n {PKG_GOOGLE_ONE}/.MainActivity")
+    am_start(device, f"-n {PKG_GOOGLE_ONE}/.MainActivity", android_user)
     
     # Mandatory wait window: Let Google One cache the Build.MODEL prop inside JVM memory
     log.info("Allowing static property class caching (6s)...")
@@ -1032,6 +1189,47 @@ _CLAIM_SUCCESS_MARKERS = [
     "you're all set", "subscription started", "successfully activated",
     "enjoy your subscription", "trial activated", "successfully redeemed"
 ]
+_APP_CONSTRAINT_MARKERS = {
+    "offer_not_available": [
+        "offer not available",
+        "this offer isn't available",
+        "this offer is not available",
+        "no longer available",
+    ],
+    "family_group_validation_restriction": [
+        "family group",
+        "family manager",
+        "family validation",
+        "not available for family members",
+    ],
+    "account_profile_country_mismatch": [
+        "country mismatch",
+        "not available in your country",
+        "profile country",
+        "payments profile country",
+        "change your country",
+    ],
+}
+_VERIFY_NUMBER_RE = re.compile(
+    r"\btap\s+([0-9])\s*([0-9])\s+on\s+your\s+phone\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_layout_text(raw: str) -> str:
+    """Normalize UI XML/text dumps before token regex matching."""
+    text = html.unescape(raw or "")
+    text = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", text)
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def extract_verification_number(raw_layout: str) -> str:
+    normalized = _normalize_layout_text(raw_layout)
+    match = _VERIFY_NUMBER_RE.search(normalized)
+    if not match:
+        return ""
+    return f"{match.group(1)}{match.group(2)}"
 
 
 def step5_restore_and_scrape(
@@ -1059,6 +1257,15 @@ def step5_restore_and_scrape(
 
     # Quick early eligibility check
     text_check = get_screen_text(device)
+    constraint = detect_application_constraint(text_check)
+    if constraint:
+        code, marker = constraint
+        log.warning("Application-level constraint detected: %s (%s)", code, marker)
+        take_screenshot(device, job_id, "app_constraint")
+        print("[STATUS]: APP_CONSTRAINT")
+        result["status"] = "APP_CONSTRAINT"
+        result["message"] = code
+        return result
     if any(marker in text_check for marker in _INELIGIBLE_MARKERS):
         log.warning("System detected early Google One offer block.")
         take_screenshot(device, job_id, "fail")
@@ -1081,6 +1288,16 @@ def step5_restore_and_scrape(
 
     # Inspect for active benefits banners
     screen_text = get_screen_text(device)
+    constraint = detect_application_constraint(screen_text)
+    if constraint:
+        code, marker = constraint
+        log.warning("Application-level constraint detected: %s (%s)", code, marker)
+        take_screenshot(device, job_id, "app_constraint")
+        print("[STATUS]: APP_CONSTRAINT")
+        result["status"] = "APP_CONSTRAINT"
+        result["message"] = code
+        return result
+
     if any(marker in screen_text for marker in _OFFER_MARKERS):
         log.info("✅ Offer banner found in current interface.")
         result["status"] = "OFFER_FOUND"
@@ -1096,6 +1313,15 @@ def step5_restore_and_scrape(
         # Cycle up to 6 layout pages of the purchase WebView flow to trigger intent mapping
         for page in range(6):
             current_text = get_screen_text(device)
+            constraint = detect_application_constraint(current_text)
+            if constraint:
+                code, marker = constraint
+                log.warning("Application-level constraint during claim: %s (%s)", code, marker)
+                take_screenshot(device, job_id, "app_constraint")
+                print("[STATUS]: APP_CONSTRAINT")
+                result["status"] = "APP_CONSTRAINT"
+                result["message"] = code
+                return result
             
             if any(succ in current_text for succ in _CLAIM_SUCCESS_MARKERS):
                 log.info("✅ Claim success signature caught at page #%d", page)
@@ -1143,6 +1369,14 @@ def step5_restore_and_scrape(
                     human_delay(5.0, 8.0)
                     
                     scr_txt = get_screen_text(device)
+                    constraint = detect_application_constraint(scr_txt)
+                    if constraint:
+                        code, marker = constraint
+                        take_screenshot(device, job_id, "app_constraint")
+                        print("[STATUS]: APP_CONSTRAINT")
+                        result["status"] = "APP_CONSTRAINT"
+                        result["message"] = code
+                        return result
                     if any(marker in scr_txt for marker in _OFFER_MARKERS):
                         result["status"] = "OFFER_FOUND"
                     elif any(block in scr_txt for block in _INELIGIBLE_MARKERS):
@@ -1171,6 +1405,53 @@ def step5_restore_and_scrape(
     return result
 
 
+def detect_application_constraint(text: str) -> tuple[str, str] | None:
+    lowered = text.lower()
+    for code, markers in _APP_CONSTRAINT_MARKERS.items():
+        for marker in markers:
+            if marker in lowered:
+                return code, marker
+    return None
+
+
+def start_view_hierarchy_monitor(device: u2.Device, job_id: str) -> tuple[threading.Event, threading.Thread]:
+    """Watch active UI hierarchy for 2-digit phone verification prompts."""
+    stop_event = threading.Event()
+    seen_codes: set[str] = set()
+
+    def _worker() -> None:
+        while not stop_event.is_set():
+            try:
+                dump = device.dump_hierarchy()
+                code = extract_verification_number(dump or "")
+                if code:
+                    if code not in seen_codes:
+                        seen_codes.add(code)
+                        log.info("[%s] Verification phone-tap number detected: %s", job_id, code)
+                        print(f"[VERIFY_NUMBER]: {code}", flush=True)
+            except Exception as exc:
+                log.debug("[%s] View hierarchy monitor read failed: %s", job_id, exc)
+            stop_event.wait(1.0)
+
+    thread = threading.Thread(target=_worker, name=f"ui-monitor-{job_id}", daemon=True)
+    thread.start()
+    return stop_event, thread
+
+
+def stop_view_hierarchy_monitor(
+    stop_event: threading.Event | None,
+    thread: threading.Thread | None,
+    job_id: str,
+    timeout: float = 5.0,
+) -> None:
+    if stop_event is not None:
+        stop_event.set()
+    if thread is not None:
+        thread.join(timeout=timeout)
+        if thread.is_alive():
+            log.warning("[%s] View hierarchy monitor did not stop within %.1fs; not starting another monitor", job_id, timeout)
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  CORE ORCHESTRATOR
 # ═══════════════════════════════════════════════════════════════════
@@ -1181,6 +1462,8 @@ def run_pipeline(
     job_id: str,
     adb_target: str = "localhost:5555",
     reset_identity: bool = True,
+    totp_secret: str = "",
+    android_user: int | None = None,
 ) -> dict:
     """Main wrapper execution block handling full lifecycle, pre-flight checks, and base restorations."""
     start_time = time.time()
@@ -1193,10 +1476,13 @@ def run_pipeline(
         "elapsed_seconds": 0.0
     }
     device = None
+    monitor_stop: threading.Event | None = None
+    monitor_thread: threading.Thread | None = None
 
     try:
         # Establish robust device link
         device = get_robust_device(adb_target, timeout_sec=120)
+        monitor_stop, monitor_thread = start_view_hierarchy_monitor(device, job_id)
 
         # Pre-flight Leak prevention audit
         if not audit_network_and_dns(device):
@@ -1218,6 +1504,11 @@ def run_pipeline(
             
         if not booted:
             log.warning("Android boot flag is still pending. Proceeding with pipeline...")
+
+        switch_android_user(device, android_user)
+
+        # STEP -1: Profile-scoped package reset before any app view starts.
+        deep_target_package_reset(device, android_user)
 
         # STEP 0: Reset Identity
         if reset_identity:
@@ -1249,19 +1540,34 @@ def run_pipeline(
             try:
                 log.info("Re-acquiring uiautomator2 device handle after identity reset...")
                 device = get_robust_device(adb_target, timeout_sec=120)
+                switch_android_user(device, android_user)
+                old_thread = monitor_thread
+                stop_view_hierarchy_monitor(monitor_stop, monitor_thread, job_id)
+                monitor_stop = None
+                monitor_thread = None
+                if old_thread is None or not old_thread.is_alive():
+                    monitor_stop, monitor_thread = start_view_hierarchy_monitor(device, job_id)
             except Exception as exc:
                 result["message"] = f"Failed to re-acquire device handle after identity reset: {exc}"
                 print("[STATUS]: ERROR")
                 return result
 
         # STEP 1: Cache clear
-        if not step1_init_and_purge(device, adb_target):
+        if not step1_init_and_purge(device, adb_target, android_user):
             result["message"] = "Step 1 (Clean environment) failed."
             print("[STATUS]: ERROR")
             return result
 
         # STEP 2: Auth sequence
-        login_res, device = step2_swap_and_login(device, gmail, password, adb_target, job_id)
+        login_res, device = step2_swap_and_login(
+            device,
+            gmail,
+            password,
+            adb_target,
+            job_id,
+            totp_secret=totp_secret,
+            android_user=android_user,
+        )
         
         # Device handle is refreshed inside step2 after prop swap to recover from DeadSystemException
         log.info("Post-login: using refreshed device handle from step2.")
@@ -1279,7 +1585,7 @@ def run_pipeline(
         time.sleep(15)
 
         # STEP 4: Google One trigger under mock Pixel 10 Pro SDK
-        if not step4_swap_and_launch_google_one(device, adb_target, job_id):
+        if not step4_swap_and_launch_google_one(device, adb_target, job_id, android_user):
             result["message"] = "Step 4 (Target launch) failed."
             run_build_props("restore", adb_target)
             return result
@@ -1300,6 +1606,7 @@ def run_pipeline(
         except Exception:
             pass
     finally:
+        stop_view_hierarchy_monitor(monitor_stop, monitor_thread, job_id)
         result["elapsed_seconds"] = round(time.time() - start_time, 1)
         log.info("━━━ Pipeline Closed. Outcome: %s (Duration: %.1fs) ━━━", 
                  result["status"], result["elapsed_seconds"])
@@ -1318,8 +1625,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ReDroid Dual-Identity Automation Core")
     parser.add_argument("--gmail", help="Google Account Username")
     parser.add_argument("--password", help="Account Password")
+    parser.add_argument("--totp-secret", default="", help="32-character base32 TOTP secret")
     parser.add_argument("--job-id", default="", help="Automation Job ID")
     parser.add_argument("--adb-target", default="localhost:5555", help="ADB target IP:port")
+    parser.add_argument("--android-user", type=int, default=None, help="Android multi-user profile id")
     parser.add_argument("--batch", help="Path to JSON batch file")
     parser.add_argument("--no-reset", action="store_true", help="Bypass device reset")
 
@@ -1337,8 +1646,20 @@ def main() -> None:
 
         results = []
         for idx, acct in enumerate(accounts, 1):
-            gmail = acct.get("gmail", "")
-            password = acct.get("password", "")
+            raw_token = str(acct.get("account", "") or acct.get("token", ""))
+            try:
+                if raw_token:
+                    gmail, password, parsed_secret = parse_account_token(raw_token)
+                else:
+                    gmail = str(acct.get("gmail", "")).strip().lower()
+                    password = str(acct.get("password", ""))
+                    parsed_secret = ""
+                totp_secret = normalize_totp_secret(
+                    str(acct.get("totp_secret", "") or acct.get("2fa_secret", "") or parsed_secret)
+                )
+            except ValueError as exc:
+                log.error("Skipping batch account %d: %s", idx, exc)
+                continue
             if not gmail or not password:
                 continue
                 
@@ -1350,7 +1671,9 @@ def main() -> None:
                 password=password,
                 job_id=job_id,
                 adb_target=args.adb_target,
-                reset_identity=not args.no_reset
+                reset_identity=not args.no_reset,
+                totp_secret=totp_secret,
+                android_user=args.android_user,
             )
             results.append(res)
 
@@ -1358,6 +1681,16 @@ def main() -> None:
         sys.exit(0)
 
     # Single Account Mode
+    try:
+        token_gmail, token_password, token_secret = parse_account_token(args.gmail or "")
+        if token_password and not args.password:
+            args.gmail = token_gmail
+            args.password = token_password
+            args.totp_secret = args.totp_secret or token_secret
+        args.totp_secret = normalize_totp_secret(args.totp_secret)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     if not args.gmail or not args.password:
         parser.error("--gmail and --password are required or use --batch")
 
@@ -1369,7 +1702,9 @@ def main() -> None:
         password=args.password,
         job_id=args.job_id,
         adb_target=args.adb_target,
-        reset_identity=not args.no_reset
+        reset_identity=not args.no_reset,
+        totp_secret=args.totp_secret,
+        android_user=args.android_user,
     )
     print(json.dumps(result, indent=2))
     sys.exit(0 if result["status"] in ("CLAIMED", "OFFER_FOUND") else 1)

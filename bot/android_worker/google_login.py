@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -23,6 +24,21 @@ from .device import launch_app, take_screenshot
 from .humanize import HumanInteractor, create_human
 
 logger = logging.getLogger(__name__)
+
+_BASE32_SECRET_RE = re.compile(r"^[A-Z2-7]{32}$")
+
+
+def _normalize_totp_secret(secret: str) -> str:
+    normalized = re.sub(r"\s+", "", secret or "").replace("=", "").upper()
+    if normalized and not _BASE32_SECRET_RE.fullmatch(normalized):
+        raise ValueError("TOTP secret must be a 32-character base32 token")
+    return normalized
+
+
+def _current_totp_code(secret: str) -> str:
+    import pyotp
+
+    return pyotp.TOTP(_normalize_totp_secret(secret)).now()
 
 # ── State detection markers ──────────────────────────────────────
 
@@ -151,6 +167,10 @@ async def login_google_account(
         "message": "",
         "screenshots": [],
     }
+
+    totp_secret = _normalize_totp_secret(totp_secret)
+    if totp_secret:
+        method = METHOD_TOTP
 
     # ── Validate method before doing any work ────────────────────
     valid_methods = {METHOD_DEVICE_PROMPT, METHOD_TOTP}
@@ -445,10 +465,7 @@ async def login_google_account(
 
         if state == "TOTP" and totp_secret:
             logger.info("[%s] Entering TOTP code (humanized)", job_id)
-            # pyrefly: ignore [missing-import]
-            import pyotp
-            totp = pyotp.TOTP(totp_secret)
-            code = totp.now()
+            code = _current_totp_code(totp_secret)
             logger.info("[%s] TOTP code generated: ***", job_id)
 
             # Humanized TOTP entry — type digit-by-digit

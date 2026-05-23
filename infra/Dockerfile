@@ -40,5 +40,5 @@ RUN find /app -name "*.sh" -exec sed -i "s/\r$//" {} \; \
 # Expose API port
 EXPOSE 8800
 
-# Run the API server. Default bind is localhost because worker-api uses host networking.
+# Run the API server. Compose publishes this namespace on host loopback only.
 CMD ["sh", "-c", "uvicorn bot.android_worker.api_server:app --host ${WORKER_API_BIND:-127.0.0.1} --port 8800 --log-level info"]

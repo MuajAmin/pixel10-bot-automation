@@ -57,6 +57,7 @@ ensure_host_vpn() {
     echo "  Ensuring Gluetun uses latest VPN config from config/proton.conf..."
     mkdir -p "$SCRIPT_DIR/infra/wireguard"
     cp "$SCRIPT_DIR/config/proton.conf" "$SCRIPT_DIR/infra/wireguard/main.conf"
+    cp "$SCRIPT_DIR/config/proton.conf" "$SCRIPT_DIR/infra/wireguard/proton.conf"
     cd "$SCRIPT_DIR/infra"
 }
 
@@ -82,6 +83,14 @@ wait_for_android() {
     exit 1
 }
 
+restore_gluetun_routing() {
+    echo "  Restoring Gluetun routing and DNS guardrails..."
+    bash "$SCRIPT_DIR/infra/fix_vpn_routing.sh" || {
+        echo "    ERROR: failed to restore Gluetun routing guardrails"
+        exit 1
+    }
+}
+
 echo ""
 echo "=== Phase 3: Docker Compose ($ACTION) ==="
 cd "$SCRIPT_DIR/infra"
@@ -92,19 +101,7 @@ case "$ACTION" in
         docker compose up -d --build
         wait_for_android
 
-        echo "  Restoring Gluetun routing policy rules..."
-        docker exec -u 0 gluetun sh -c '
-        ETH_IP=$(ip -o -4 addr show dev eth0 | awk "{print \$4}" | cut -d/ -f1)
-        ETH_NET=$(ip route | grep "dev eth0" | grep "proto kernel" | awk "{print \$1}")
-        if [ -n "$ETH_IP" ] && [ -n "$ETH_NET" ]; then
-          ip rule add from all to "$ETH_NET" lookup main pref 98 2>/dev/null || true
-          ip rule add from "$ETH_IP" lookup 1002 pref 100 2>/dev/null || true
-          ip rule add not from all fwmark 0xca6c lookup 51820 pref 101 2>/dev/null || true
-          echo "    ✅ Gluetun routing rules applied"
-        else
-          echo "    ❌ Failed to detect eth0 IP/Net in gluetun"
-        fi
-        ' || true
+        restore_gluetun_routing
 
         echo ""
         echo "=== Post-boot hardening ==="
@@ -127,19 +124,7 @@ case "$ACTION" in
         docker compose up -d --build --force-recreate
         wait_for_android
 
-        echo "  Restoring Gluetun routing policy rules..."
-        docker exec -u 0 gluetun sh -c '
-        ETH_IP=$(ip -o -4 addr show dev eth0 | awk "{print \$4}" | cut -d/ -f1)
-        ETH_NET=$(ip route | grep "dev eth0" | grep "proto kernel" | awk "{print \$1}")
-        if [ -n "$ETH_IP" ] && [ -n "$ETH_NET" ]; then
-          ip rule add from all to "$ETH_NET" lookup main pref 98 2>/dev/null || true
-          ip rule add from "$ETH_IP" lookup 1002 pref 100 2>/dev/null || true
-          ip rule add not from all fwmark 0xca6c lookup 51820 pref 101 2>/dev/null || true
-          echo "    ✅ Gluetun routing rules applied"
-        else
-          echo "    ❌ Failed to detect eth0 IP/Net in gluetun"
-        fi
-        ' || true
+        restore_gluetun_routing
 
         echo "  Stack rebuilt"
         echo "  Run: sudo bash deploy.sh harden"

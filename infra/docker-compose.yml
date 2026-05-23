@@ -14,15 +14,15 @@
 #   │  │   Android 13  │  Proton secure DNS (10.2.0.1) active│
 #   │  └───────────────┘                                     │
 #   │                                                        │
-#   │  ┌───────────────┐  host networking                    │
+#   │  ┌───────────────┐  Shares Gluetun network namespace   │
 #   │  │  worker-api   │  ADB → 127.0.0.1:5555               │
 #   │  │  :8800 API    │  (Port mapped from Gluetun)         │
 #   │  └───────────────┘                                     │
 #   └────────────────────────────────────────────────────────┘
 #
-# Prerequisite: Place paid Proton VPN WireGuard config in infra/wireguard/main.conf
-
-version: "3.8"
+# Prerequisite: Place a standard paid Proton VPN WireGuard profile at
+# infra/wireguard/proton.conf. The file should be the unmodified ProtonVPN
+# WireGuard .conf with [Interface] and [Peer] sections.
 
 volumes:
   redroid-data:
@@ -38,12 +38,19 @@ services:
       - /dev/net/tun:/dev/net/tun
     ports:
       - "127.0.0.1:5555:5555"       # ADB port exposed safely on host loopback
+      - "127.0.0.1:8800:8800"       # Worker API exposed safely on host loopback
+    dns:
+      - 10.2.0.1
     volumes:
-      - ./wireguard/main.conf:/gluetun/wireguard/wg0.conf:ro  # Mount custom WireGuard conf
+      - ./wireguard/proton.conf:/gluetun/wireguard/wg0.conf:ro  # ProtonVPN WireGuard profile
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
       - VPN_DNS_ADDRESS=10.2.0.1     # Force Proton Secure DNS
+      - DNS_UPSTREAM_RESOLVER_TYPE=plain
+      - DNS_UPSTREAM_PLAIN_ADDRESSES=10.2.0.1:53
+      - DNS_UPDATE_PERIOD=0
+      - DOT=off
       - FIREWALL=on                  # Kill switch enabled to prevent network leaks
       - DNS_KEEP_NAMESERVER=off      # Use local Unbound resolver to route DNS over VPN
       - HEALTH_RESTART_VPN=off
@@ -55,10 +62,13 @@ services:
     container_name: pixel10-android
     privileged: true
     network_mode: "container:gluetun"  # Shares network namespace with Gluetun
+    cpus: "6.0"
+    mem_limit: 4g
+    memswap_limit: 4g
     deploy:
       resources:
         limits:
-          cpus: '6'
+          cpus: "6.0"
           memory: 4G
     volumes:
       - redroid-data:/data
@@ -164,7 +174,7 @@ services:
       context: ..
       dockerfile: infra/Dockerfile
     container_name: pixel10-worker
-    network_mode: host
+    network_mode: "container:gluetun"
     depends_on:
       gluetun:
         condition: service_started
@@ -176,7 +186,7 @@ services:
       - ADB_HOST=127.0.0.1
       - ADB_PORT=5555
       - ADB_CONNECT_TIMEOUT_SEC=180
-      - WORKER_API_BIND=${WORKER_API_BIND:-127.0.0.1}
+      - WORKER_API_BIND=0.0.0.0
     volumes:
       - ../data:/app/data
       - ../screenshots:/app/screenshots

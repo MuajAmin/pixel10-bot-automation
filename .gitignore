@@ -19,6 +19,7 @@ api.env
 !*.env.example
 infra/.env
 infra/keybox.xml
+config/keybox.xml
 infra/wireguard/
 
 # One-off VPS deploy/fix/debug scripts (contain or read secrets)

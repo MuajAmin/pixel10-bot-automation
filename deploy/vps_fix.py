@@ -69,16 +69,9 @@ if not booted:
 
 print("\n  ✅ Android booted!")
 
-# ── Step 3.5: Restore Gluetun routing policy rules ──
-print("\n[*] Restoring Gluetun routing policy rules...")
-run("docker exec -u 0 gluetun sh -c '"
-    "ETH_IP=\$(ip -o -4 addr show dev eth0 | awk \"{print \$4}\" | cut -d/ -f1) && "
-    "ETH_NET=\$(ip route | grep \"dev eth0\" | grep \"proto kernel\" | awk \"{print \$1}\") && "
-    "if [ -n \"\$ETH_IP\" ] && [ -n \"\$ETH_NET\" ]; then "
-    "  ip rule add from all to \"\$ETH_NET\" lookup main pref 98 2>/dev/null || true; "
-    "  ip rule add from \"\$ETH_IP\" lookup 1002 pref 100 2>/dev/null || true; "
-    "  ip rule add not from all fwmark 0xca6c lookup 51820 pref 101 2>/dev/null || true; "
-    "fi'", "Restore Gluetun Routing Rules")
+# ── Step 3.5: Restore Gluetun routing and DNS guardrails ──
+print("\n[*] Restoring Gluetun routing and DNS guardrails...")
+run("cd /root/pixel10-bot-automation && bash infra/fix_vpn_routing.sh", "Restore Gluetun Routing Guardrails")
 
 # ── Step 4: Connect ADB ──
 time.sleep(5)  # Give adbd a moment to fully initialize
@@ -99,17 +92,12 @@ if boot.strip() == "1":
     run("adb -s 127.0.0.1:5555 shell getprop ro.build.version.release 2>&1", "Android Version")
     run("adb -s 127.0.0.1:5555 shell getprop ro.build.fingerprint 2>&1", "Fingerprint")
     
-    # Verify VPN from inside ReDroid
+    # Verify routing without disclosing the VPS public IP to an external service.
     print("\n[*] Checking VPN routing from ReDroid...")
-    vpn_ip = run("adb -s 127.0.0.1:5555 shell \"/system/etc/init/magisk/busybox wget -q -O - http://api.ipify.org 2>/dev/null || curl -s -m 10 http://api.ipify.org 2>/dev/null || echo 'N/A'\"", "ReDroid public IP (VPN)")
-    host_ip = run("curl -s -m 5 http://api.ipify.org 2>&1", "VPS public IP")
-    
-    if vpn_ip and host_ip and vpn_ip.strip() != host_ip.strip() and "N/A" not in vpn_ip:
-        print(f"\n  ✅ VPN ACTIVE — ReDroid IP ({vpn_ip.strip()}) ≠ VPS IP ({host_ip.strip()})")
-    elif "N/A" in vpn_ip:
-        print("\n  ⚠️  Could not check VPN IP (neither busybox wget nor curl is functional in ReDroid)")
-    else:
-        print(f"\n  ⚠️  VPN may not be routing — IPs match ({vpn_ip.strip()} vs {host_ip.strip()})")
+    run("adb -s 127.0.0.1:5555 shell getprop net.dns1 2>&1", "Primary DNS")
+    run("adb -s 127.0.0.1:5555 shell getprop net.dns2 2>&1", "Secondary DNS")
+    run("adb -s 127.0.0.1:5555 shell ip route get 10.2.0.1 2>&1", "Route to Proton DNS")
+    run("adb -s 127.0.0.1:5555 shell ip route get 203.0.113.10 2>&1", "Default Route Probe")
     
     run("curl -s -m 3 http://127.0.0.1:8800/healthz", "Worker API health")
     

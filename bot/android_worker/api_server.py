@@ -13,13 +13,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Header
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from .config import API_KEY, API_PORT
 from .device import connect_device, device_health_check, get_device_properties
@@ -27,6 +28,24 @@ from .runner import run_android_job
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+_BASE32_SECRET_RE = re.compile(r"^[A-Z2-7]{32}$")
+
+
+def _normalize_totp_secret(secret: str) -> str:
+    normalized = re.sub(r"\s+", "", secret or "").replace("=", "").upper()
+    if normalized and not _BASE32_SECRET_RE.fullmatch(normalized):
+        raise ValueError("totp_secret must be a 32-character base32 token")
+    return normalized
+
+
+def _split_account_token(token: str) -> tuple[str, str, str] | None:
+    if "---" not in token:
+        return None
+    parts = token.strip().split("---")
+    if len(parts) != 3:
+        raise ValueError("credential token must use email---password---2fa_secret")
+    return parts[0].strip().lower(), parts[1], _normalize_totp_secret(parts[2])
 
 app = FastAPI(
     title="Gemini Pixel Offer Claim Bot Android Worker",
@@ -126,6 +145,26 @@ class JobRequest(BaseModel):
     method: str = "device_prompt"
     totp_secret: str = ""
     job_id: str = ""
+
+    @model_validator(mode="after")
+    def normalize_credentials(self) -> "JobRequest":
+        parsed = _split_account_token(self.gmail)
+        if parsed is None and "---" in self.password:
+            parsed = _split_account_token(self.password)
+        if parsed is not None:
+            self.gmail, self.password, parsed_secret = parsed
+            self.totp_secret = self.totp_secret or parsed_secret
+            self.method = "totp"
+
+        if self.method.startswith("2FA Secret:"):
+            self.totp_secret = self.totp_secret or self.method.split(":", 1)[1].strip()
+            self.method = "totp"
+
+        self.gmail = self.gmail.strip().lower()
+        self.totp_secret = _normalize_totp_secret(self.totp_secret)
+        if self.totp_secret:
+            self.method = "totp"
+        return self
 
 
 class JobResponse(BaseModel):

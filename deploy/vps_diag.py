@@ -180,16 +180,7 @@ def upload_compose_and_restart(ssh: paramiko.SSHClient, remote_dir: str) -> None
         ("Compose down", f"cd {shlex.quote(remote_dir)}/infra && docker compose down 2>&1"),
         ("Binderfs", "mountpoint -q /dev/binderfs || mount -t binder binder /dev/binderfs 2>&1"),
         ("Compose up", f"cd {shlex.quote(remote_dir)}/infra && docker compose up -d 2>&1"),
-        ("Restore Gluetun routing", (
-            "docker exec -u 0 gluetun sh -c '"
-            "ETH_IP=$(ip -o -4 addr show dev eth0 | awk \"{print \\$4}\" | cut -d/ -f1) && "
-            "ETH_NET=$(ip route | grep \"dev eth0\" | grep \"proto kernel\" | awk \"{print \\$1}\") && "
-            "if [ -n \"$ETH_IP\" ] && [ -n \"$ETH_NET\" ]; then "
-            "  ip rule add from all to \"$ETH_NET\" lookup main pref 98 2>/dev/null || true; "
-            "  ip rule add from \"$ETH_IP\" lookup 1002 pref 100 2>/dev/null || true; "
-            "  ip rule add not from all fwmark 0xca6c lookup 51820 pref 101 2>/dev/null || true; "
-            "fi'"
-        )),
+        ("Restore Gluetun routing", f"cd {shlex.quote(remote_dir)} && bash infra/fix_vpn_routing.sh"),
     ]
     for label, cmd in commands:
         timeout = 180 if label in {"Compose up", "Restore Gluetun routing"} else 60
@@ -211,8 +202,11 @@ def adb_status(ssh: paramiko.SSHClient) -> tuple[str, str]:
 
 def docker_network_probe(ssh: paramiko.SSHClient) -> str:
     cmd = (
-        f"docker run --rm --network {DOCKER_NETWORK} "
-        "curlimages/curl:8.7.1 -s --max-time 10 http://ifconfig.me 2>/dev/null || true"
+        "docker exec gluetun sh -c "
+        "'getent hosts google.com >/dev/null 2>&1; "
+        "printf \"dns=%s route=%s\" "
+        "\"$(cat /etc/resolv.conf | awk \"/^nameserver/{print \\$2}\" | paste -sd, -)\" "
+        "\"$(ip route get 10.2.0.1 2>/dev/null | head -1)\"' 2>/dev/null || true"
     )
     return ssh_run(ssh, bounded(cmd, 20), timeout=25).stdout[:80]
 
@@ -225,7 +219,7 @@ def monitor_once(ssh: paramiko.SSHClient, remote_dir: str) -> bool:
 
     print(f"Gluetun={vpn_status}")
     print(f"ReDroid={android_status}")
-    print(f"Docker VPN IP={docker_ip or 'timeout/empty'}")
+    print(f"Docker DNS route={docker_ip or 'timeout/empty'}")
     print(f"ADB={adb_ok} ({adb_detail})")
 
     ok = vpn_status == "healthy" and android_status == "running" and bool(docker_ip) and adb_ok == "OK"

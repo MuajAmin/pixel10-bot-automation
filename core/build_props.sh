@@ -446,6 +446,13 @@ push_keybox() {
     su_exec "chmod 755 /data/adb/tricky_store"
     su_exec "chmod 600 /data/adb/tricky_store/keybox.xml"
     su_exec "sed -i 's/\r$//' /data/adb/tricky_store/keybox.xml"  # Double check CRLF in container
+
+    local KB_PERM
+    KB_PERM=$(su_exec "stat -c '%a' /data/adb/tricky_store/keybox.xml" 2>/dev/null | tr -d '\r' || echo "")
+    if [ "$KB_PERM" != "600" ]; then
+        echo "  ❌ keybox.xml permission mismatch: ${KB_PERM:-missing} (must be 600)"
+        return 1
+    fi
     
     $ADB shell rm -f /data/local/tmp/keybox.xml 2>/dev/null || true
 

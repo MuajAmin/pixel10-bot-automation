@@ -12,6 +12,7 @@ for realistic delays, Bezier swipes, and offset taps.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 import time
@@ -56,6 +57,31 @@ _CLAIM_SUCCESS_MARKERS = [
     "trial activated",
     "successfully redeemed",
 ]
+_APP_CONSTRAINT_MARKERS = {
+    "offer_not_available": [
+        "offer not available",
+        "this offer isn't available",
+        "this offer is not available",
+        "no longer available",
+    ],
+    "family_group_validation_restriction": [
+        "family group",
+        "family manager",
+        "family validation",
+        "not available for family members",
+    ],
+    "account_profile_country_mismatch": [
+        "country mismatch",
+        "not available in your country",
+        "profile country",
+        "payments profile country",
+        "change your country",
+    ],
+}
+_VERIFY_NUMBER_RE = re.compile(
+    r"\btap\s+([0-9])\s*([0-9])\s+on\s+your\s+phone\b",
+    re.IGNORECASE,
+)
 
 
 from .device import get_screen_text as _screen_text
@@ -67,6 +93,20 @@ async def _screen_dump(device: u2.Device) -> str:
         return await asyncio.to_thread(device.dump_hierarchy)
     except Exception:
         return ""
+
+
+def _normalize_layout_text(raw: str) -> str:
+    text = html.unescape(raw or "")
+    text = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", text)
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_verification_number(raw_layout: str) -> str:
+    match = _VERIFY_NUMBER_RE.search(_normalize_layout_text(raw_layout))
+    if not match:
+        return ""
+    return f"{match.group(1)}{match.group(2)}"
 
 
 async def _extract_urls_from_screen(device: u2.Device) -> list[str]:
@@ -170,6 +210,40 @@ async def _extract_urls_from_screen(device: u2.Device) -> list[str]:
     return offer_urls
 
 
+def _detect_application_constraint(text: str) -> tuple[str, str] | None:
+    lowered = text.lower()
+    for code, markers in _APP_CONSTRAINT_MARKERS.items():
+        for marker in markers:
+            if marker in lowered:
+                return code, marker
+    return None
+
+
+async def _monitor_verification_number(
+    device: u2.Device,
+    job_id: str,
+    progress_callback: Any = None,
+) -> None:
+    """Poll active hierarchy and dispatch 2-digit phone-tap challenges."""
+    seen: set[str] = set()
+    while True:
+        try:
+            dump = await asyncio.wait_for(_screen_dump(device), timeout=8.0)
+        except asyncio.TimeoutError:
+            logger.warning("[%s] Verification monitor hierarchy dump timed out", job_id)
+            await asyncio.sleep(2.0)
+            continue
+
+        code = _extract_verification_number(dump or "")
+        if code:
+            if code not in seen:
+                seen.add(code)
+                logger.info("[%s] Verification phone-tap number detected: %s", job_id, code)
+                if progress_callback:
+                    await progress_callback(45, f"Tap {code} on your phone to verify sign-in")
+        await asyncio.sleep(1.0)
+
+
 # ── Main Offer Claim Flow ────────────────────────────────────────
 
 
@@ -178,6 +252,7 @@ async def claim_pixel_offer(
     gmail: str,
     job_id: str = "",
     human_profile: str = "normal",
+    progress_callback: Any = None,
 ) -> dict[str, Any]:
     """Open Google One app and attempt to find and claim a Pixel offer.
 
@@ -209,6 +284,9 @@ async def claim_pixel_offer(
 
     # Initialize HumanInteractor for all UI interactions
     human = create_human(device, profile=human_profile)
+    monitor_task = asyncio.create_task(
+        _monitor_verification_number(device, job_id, progress_callback)
+    )
 
     try:
         # ── Clear stale sources before scanning ──────────────────
@@ -244,11 +322,15 @@ async def claim_pixel_offer(
 
         # Check Benefits tab
         benefits_found = await _try_benefits_tab(device, job_id, result, human=human)
+        if result["status"] == "APP_CONSTRAINT":
+            return result
 
         # ── Strategy 2: Settings → Check for offers ──────────────
         if not benefits_found:
             logger.info("[%s] Trying Settings → Check for offers", job_id)
             await _try_settings_check(device, job_id, result, human=human)
+            if result["status"] == "APP_CONSTRAINT":
+                return result
 
         # ── Strategy 3: Direct offer URL navigation ──────────────
         # Only use extracted URLs as supplementary evidence — do NOT
@@ -278,6 +360,8 @@ async def claim_pixel_offer(
             claimed = await _click_claim_buttons(device, job_id, result, human=human)
             if claimed:
                 result["status"] = "CLAIMED"
+            elif result["status"] == "APP_CONSTRAINT":
+                return result
 
         # ── Final URL extraction sweep ───────────────────────────
         # After the claim flow, try to extract the offer URL — but ONLY
@@ -306,6 +390,12 @@ async def claim_pixel_offer(
         logger.exception("[%s] Offer claim error: %s", job_id, exc)
         result["status"] = "ERROR"
         result["message"] = str(exc)
+    finally:
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
 
     return result
 
@@ -346,6 +436,16 @@ async def _try_benefits_tab(
         result["screenshots"].append(ss)
 
     text = await _screen_text(device)
+    constraint = _detect_application_constraint(text)
+    if constraint:
+        code, marker = constraint
+        logger.warning("[%s] Application constraint on Benefits tab: %s (%s)", job_id, code, marker)
+        result["status"] = "APP_CONSTRAINT"
+        result["message"] = code
+        ss = await take_screenshot(device, "app_constraint_benefits", job_id)
+        if ss:
+            result["screenshots"].append(ss)
+        return False
 
     # Check for offers
     if any(m in text for m in _NO_OFFER_MARKERS):
@@ -418,6 +518,16 @@ async def _try_settings_check(
                     result["screenshots"].append(ss)
 
                 text = await _screen_text(device)
+                constraint = _detect_application_constraint(text)
+                if constraint:
+                    code, marker = constraint
+                    logger.warning("[%s] Application constraint in settings check: %s (%s)", job_id, code, marker)
+                    result["status"] = "APP_CONSTRAINT"
+                    result["message"] = code
+                    ss = await take_screenshot(device, "app_constraint_settings", job_id)
+                    if ss:
+                        result["screenshots"].append(ss)
+                    return
                 if any(m in text for m in _OFFER_MARKERS):
                     result["status"] = "OFFER_FOUND"
                     if "pixel" in text or "gemini" in text or "ai premium" in text:
@@ -472,6 +582,13 @@ async def _try_gemini_app(
                 result["screenshots"].append(ss)
 
             text = await _screen_text(device)
+            constraint = _detect_application_constraint(text)
+            if constraint:
+                code, marker = constraint
+                logger.warning("[%s] Application constraint in Gemini app: %s (%s)", job_id, code, marker)
+                result["status"] = "APP_CONSTRAINT"
+                result["message"] = code
+                return
             if any(m in text for m in _OFFER_MARKERS):
                 result["status"] = "OFFER_FOUND"
                 result["offer_type"] = "gemini"
@@ -507,6 +624,16 @@ async def _click_claim_buttons(
     max_steps = 8
     for step in range(max_steps):
         text = await _screen_text(device)
+        constraint = _detect_application_constraint(text)
+        if constraint:
+            code, marker = constraint
+            logger.warning("[%s] Application constraint during claim: %s (%s)", job_id, code, marker)
+            result["status"] = "APP_CONSTRAINT"
+            result["message"] = code
+            ss = await take_screenshot(device, f"app_constraint_claim_{step}", job_id)
+            if ss:
+                result["screenshots"].append(ss)
+            return False
 
         # Check if we've reached success
         if any(m in text for m in _CLAIM_SUCCESS_MARKERS):

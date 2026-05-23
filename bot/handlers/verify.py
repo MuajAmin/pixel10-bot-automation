@@ -35,6 +35,27 @@ from .common import (
 
 logger = logging.getLogger(__name__)
 
+_BASE32_SECRET_RE = re.compile(r"^[A-Z2-7]{32}$")
+
+
+def _normalize_totp_secret(secret: str) -> str:
+    normalized = re.sub(r"\s+", "", secret or "").replace("=", "").upper()
+    if normalized and not _BASE32_SECRET_RE.fullmatch(normalized):
+        raise ValueError("TOTP secret must be a 32-character base32 token")
+    return normalized
+
+
+def _parse_credential_token(text_value: str) -> tuple[str, str, str] | None:
+    if "---" not in text_value:
+        return None
+    parts = text_value.strip().split("---")
+    if len(parts) != 3:
+        raise ValueError("Use email---password---2fa_secret")
+    gmail = parts[0].strip().lower()
+    password = parts[1]
+    secret = _normalize_totp_secret(parts[2])
+    return gmail, password, secret
+
 
 # ── Job creation ─────────────────────────────────────────────────
 
@@ -256,6 +277,43 @@ async def handle_verify_text(
 
     # ── Gmail input ──────────────────────────────────────────────
     if context.user_data.get("awaiting_verify_gmail"):
+        try:
+            credential_token = _parse_credential_token(text_value)
+        except ValueError as exc:
+            await update.effective_message.reply_html(
+                "<b>✨ Create verify</b>\n\n"
+                f"{escape(str(exc))}\n\n"
+                "Expected format:\n"
+                "<code>email---password---2fa_secret</code>",
+                reply_markup=cancel_keyboard(),
+            )
+            return True
+
+        if credential_token is not None:
+            gmail, password, secret = credential_token
+            if not valid_gmail(gmail):
+                await update.effective_message.reply_html(
+                    "<b>✨ Create verify</b>\n\n"
+                    "Only <code>@gmail.com</code> addresses are supported.",
+                    reply_markup=cancel_keyboard(),
+                )
+                return True
+            context.user_data["verify_gmail"] = gmail
+            context.user_data["verify_password"] = password
+            context.user_data["verify_totp_secret"] = secret
+            context.user_data.pop("awaiting_verify_gmail", None)
+            await start_verify_job(
+                update,
+                context,
+                account,
+                telegram_id,
+                gmail,
+                password,
+                f"2FA Secret:{secret}",
+                "2FA Secret",
+            )
+            return True
+
         gmail = text_value.strip().lower()
         if not valid_gmail(gmail):
             await update.effective_message.reply_html(
@@ -277,6 +335,41 @@ async def handle_verify_text(
 
     # ── Password input ───────────────────────────────────────────
     if context.user_data.get("awaiting_verify_password"):
+        try:
+            credential_token = _parse_credential_token(text_value)
+        except ValueError as exc:
+            await update.effective_message.reply_html(
+                "<b>✨ Create verify</b>\n\n"
+                f"{escape(str(exc))}",
+                reply_markup=cancel_keyboard(),
+            )
+            return True
+
+        if credential_token is not None:
+            gmail, password, secret = credential_token
+            if not valid_gmail(gmail):
+                await update.effective_message.reply_html(
+                    "<b>✨ Create verify</b>\n\n"
+                    "Only <code>@gmail.com</code> addresses are supported.",
+                    reply_markup=cancel_keyboard(),
+                )
+                return True
+            context.user_data["verify_gmail"] = gmail
+            context.user_data["verify_password"] = password
+            context.user_data["verify_totp_secret"] = secret
+            context.user_data.pop("awaiting_verify_password", None)
+            await start_verify_job(
+                update,
+                context,
+                account,
+                telegram_id,
+                gmail,
+                password,
+                f"2FA Secret:{secret}",
+                "2FA Secret",
+            )
+            return True
+
         password = text_value.strip()
         if not password:
             await update.effective_message.reply_html(
@@ -299,17 +392,19 @@ async def handle_verify_text(
 
     # ── TOTP secret input ────────────────────────────────────────
     if context.user_data.get("awaiting_totp_secret"):
-        secret = text_value.strip().replace(" ", "")
-        if not secret or not re.fullmatch(r"[A-Z2-7=]+", secret.upper()):
+        try:
+            secret = _normalize_totp_secret(text_value)
+        except ValueError:
+            secret = ""
+        if not secret:
             await update.effective_message.reply_html(
                 "<b>Choose the sign-in verification method.</b>\n\n"
-                "Invalid TOTP secret. It must be a base32 string, for example:\n"
-                "<code>JBSWY3DPEHPK3PXP</code>\n\n"
+                "Invalid TOTP secret. It must be a 32-character base32 string.\n\n"
                 "Send the correct secret or press Cancel.",
                 reply_markup=cancel_keyboard(),
             )
             return True
-        context.user_data["verify_totp_secret"] = secret.upper()
+        context.user_data["verify_totp_secret"] = secret
         context.user_data.pop("awaiting_totp_secret", None)
         gmail = str(context.user_data.get("verify_gmail", ""))
         password = str(context.user_data.get("verify_password", ""))
@@ -327,7 +422,7 @@ async def handle_verify_text(
             telegram_id,
             gmail,
             password,
-            f"2FA Secret:{secret.upper()}",
+            f"2FA Secret:{secret}",
             "2FA Secret",
         )
         return True

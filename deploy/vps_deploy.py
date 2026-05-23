@@ -330,23 +330,9 @@ exit 1
         pr("ERROR", "Android did not boot or ADB did not respond")
         raise SystemExit(1)
 
-    # Restore Gluetun routing policy rules inside the namespace
-    pr("🌐", "Restoring Gluetun routing policy rules...")
-    ssh_exec(ssh, r"""
-docker exec -u 0 gluetun sh -c '
-ETH_IP=$(ip -o -4 addr show dev eth0 | awk "{print \$4}" | cut -d/ -f1)
-ETH_NET=$(ip route | grep "dev eth0" | grep "proto kernel" | awk "{print \$1}")
-if [ -n "$ETH_IP" ] && [ -n "$ETH_NET" ]; then
-  ip rule add from all to "$ETH_NET" lookup main pref 98 2>/dev/null || true
-  ip rule add from "$ETH_IP" lookup 1002 pref 100 2>/dev/null || true
-  ip rule add not from all fwmark 0xca6c lookup 51820 pref 101 2>/dev/null || true
-  echo "✅ Gluetun routing rules restored"
-else
-  echo "❌ Failed to detect eth0 IP/Net in gluetun"
-  exit 1
-fi
-'
-""", check=False)
+    # Restore Gluetun routing and DNS guardrails inside the shared namespace.
+    pr("🌐", "Restoring Gluetun routing and DNS guardrails...")
+    ssh_exec(ssh, f"cd {REMOTE_DIR} && bash infra/fix_vpn_routing.sh", check=True)
 
     # Check container status
     ssh_exec(ssh, "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'")

@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import getpass
@@ -766,31 +767,29 @@ class MasterDeployer:
             check=False,
         )
 
-        # Run network fix (policy routing)
-        UI.step("Applying VPN/Docker policy routing...")
+        # Run network fix (policy routing + DNS guardrails)
+        UI.step("Applying VPN/Docker policy routing and DNS guardrails...")
         self.conn.exec(
-            f"cd {remote_infra} && bash scripts/network_fix.sh up",
+            f"cd {self.remote_dir} && bash infra/fix_vpn_routing.sh",
             sudo=True, timeout=60,
         )
 
-        # Verify routing
-        UI.step("Verifying container VPN routing...")
-        code, container_ip = self.conn.exec_quiet(
-            f"docker exec {self.config.container_name} curl -s -m 10 ifconfig.me"
-        )
-        _, vps_ip = self.conn.exec_quiet("curl -s -4 ifconfig.me")
-
-        if code == 0 and container_ip.strip():
-            container_ip = container_ip.strip()
-            vps_ip = vps_ip.strip()
-            UI.info(f"Container IP: {container_ip}")
-            UI.info(f"VPS IP:       {vps_ip}")
-            if container_ip != vps_ip:
-                UI.ok("VPN routing ACTIVE — container uses VPN IP")
-            else:
-                UI.warn("Container IP matches VPS IP — VPN may not be routing")
+        # Verify routing without disclosing the VPS public IP to an external service.
+        UI.step("Verifying container DNS and route boundary...")
+        _, dns1 = self.conn.exec_quiet(f"adb -s {self.config.adb_target} shell getprop net.dns1")
+        _, dns_route = self.conn.exec_quiet(f"adb -s {self.config.adb_target} shell ip route get 10.2.0.1")
+        _, default_route = self.conn.exec_quiet(f"adb -s {self.config.adb_target} shell ip route get 203.0.113.10")
+        UI.info(f"DNS:           {dns1.strip() or 'UNKNOWN'}")
+        UI.info(f"DNS route:     {dns_route.strip() or 'UNKNOWN'}")
+        UI.info(f"Default route: {default_route.strip() or 'UNKNOWN'}")
+        route_text = default_route.strip()
+        route_uses_vpn = re.search(r"\bdev\s+(tun|wg)[A-Za-z0-9_.:-]*\b", route_text)
+        route_uses_eth = re.search(r"\bdev\s+eth[0-9_.:-]*\b", route_text)
+        route_blocked = "unreachable" in route_text.lower() or "prohibit" in route_text.lower()
+        if dns1.strip() == "10.2.0.1" and route_uses_vpn and not route_uses_eth and not route_blocked:
+            UI.ok("VPN routing guardrails active")
         else:
-            UI.warn("Could not verify container IP (curl may not be available in container)")
+            UI.warn("VPN routing guardrails need review")
 
     # ── Phase 6: Deep Spoofing Setup ───────────────────────────────
     def phase_6_spoofing_setup(self) -> None:
@@ -914,15 +913,18 @@ class MasterDeployer:
             sudo=True, timeout=300,
         )
 
-        # Final VPN check
+        # Final VPN check without public IP probes.
         UI.step("Final VPN routing check...")
-        code, container_ip = self.conn.exec_quiet(
-            f"docker exec {self.config.container_name} curl -s -m 10 ifconfig.me"
-        )
-        _, vps_ip = self.conn.exec_quiet("curl -s -4 ifconfig.me")
-
-        container_ip = container_ip.strip() if code == 0 else "UNKNOWN"
-        vps_ip = vps_ip.strip()
+        _, dns1 = self.conn.exec_quiet(f"adb -s {self.config.adb_target} shell getprop net.dns1")
+        _, dns_route = self.conn.exec_quiet(f"adb -s {self.config.adb_target} shell ip route get 10.2.0.1")
+        _, default_route = self.conn.exec_quiet(f"adb -s {self.config.adb_target} shell ip route get 203.0.113.10")
+        dns1 = dns1.strip() or "UNKNOWN"
+        dns_route = dns_route.strip() or "UNKNOWN"
+        default_route = default_route.strip() or "UNKNOWN"
+        route_uses_vpn = re.search(r"\bdev\s+(tun|wg)[A-Za-z0-9_.:-]*\b", default_route)
+        route_uses_eth = re.search(r"\bdev\s+eth[0-9_.:-]*\b", default_route)
+        route_blocked = "unreachable" in default_route.lower() or "prohibit" in default_route.lower()
+        vpn_active = dns1 == "10.2.0.1" and bool(route_uses_vpn) and not route_uses_eth and not route_blocked
 
         # Print final summary
         _, model = self.conn.exec_quiet(
@@ -947,9 +949,9 @@ class MasterDeployer:
 ║  Fingerprint:  {fingerprint.strip()[:46]:<46}║
 ║  Boot State:   {boot_state.strip():<46}║
 ║  Magisk:       {magisk_ver.strip():<46}║
-║  Container IP: {container_ip:<46}║
-║  VPS IP:       {vps_ip:<46}║
-║  VPN Active:   {'YES ✅' if container_ip != vps_ip else 'NO ❌':<46}║
+║  DNS:          {dns1:<46}║
+║  DNS Route:    {dns_route[:46]:<46}║
+║  VPN Active:   {'YES ✅' if vpn_active else 'REVIEW ❌':<46}║
 ║                                                              ║
 ║  ADB:  adb connect {self.config.vps_host}:5555               ║
 ║  API:  ssh -L 8800:127.0.0.1:8800 {self.config.vps_user}@{self.config.vps_host}║
